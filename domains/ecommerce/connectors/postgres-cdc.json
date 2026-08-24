@@ -1,0 +1,41 @@
+{
+  "name": "mosaic-postgres-cdc",
+  "config": {
+    "connector.class": "io.debezium.connector.postgresql.PostgresConnector",
+    "tasks.max": "1",
+
+    "database.hostname": "postgres",
+    "database.port": "5432",
+    "database.user": "cdc",
+    "database.password": "cdcpw",
+    "database.dbname": "ecommerce_md",
+    "topic.prefix": "mosaic.postgres",
+
+    "_comment_slot": "Logical replication slot + pgoutput plugin (WAL-based CDC).",
+    "plugin.name": "pgoutput",
+    "slot.name": "mosaic_slot",
+    "publication.name": "mosaic_pub",
+    "publication.autocreate.mode": "filtered",
+    "schema.include.list": "public",
+    "table.include.list": "public.users,public.products,public.categories,public.inventory",
+    "snapshot.mode": "initial",
+
+    "_comment_wal": "WAL accumulation guard (GR1 section 4.4 / Table 4.3). The heartbeat writes to a table inside the publication so that confirmed_flush_lsn advances even when the monitored tables are idle -- without this, an idle period looks identical to a stalled consumer and WAL grows unbounded.",
+    "heartbeat.interval.ms": "10000",
+    "heartbeat.action.query": "INSERT INTO public.cdc_heartbeat(ts) VALUES (now())",
+
+    "_comment_masking": "Layer-1 PII masking at the connector, not via SMT. See docs/adr/0004-connector-native-masking.md. national_id is excluded outright rather than hashed: GR1 Appendix A says it must never be persisted, and a salted hash is still persistence.",
+    "column.mask.hash.SHA-256.with.salt.mosaicPiiSalt": "public.users.email,public.users.phone",
+    "column.exclude.list": "public.users.national_id",
+
+    "_comment_envelope": "No ExtractNewRecordState here -- Bronze keeps the full envelope per GR1 section 4.2.",
+
+    "decimal.handling.mode": "string",
+    "time.precision.mode": "connect",
+
+    "key.converter": "io.confluent.connect.avro.AvroConverter",
+    "key.converter.schema.registry.url": "http://schema-registry:8081",
+    "value.converter": "io.confluent.connect.avro.AvroConverter",
+    "value.converter.schema.registry.url": "http://schema-registry:8081"
+  }
+}

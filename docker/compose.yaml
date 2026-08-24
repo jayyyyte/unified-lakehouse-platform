@@ -1,0 +1,323 @@
+# ==========================================================================
+# MOSAIC - Unified Lakehouse Platform
+# Single-node Docker Compose deployment. Derived from GR1 Appendix B, with the
+# substitutions recorded in docs/adr/ (OPA for Ranger, Marquez for DataHub).
+#
+# Profiles keep the default footprint survivable on one machine:
+#   (default)         sources + CDC + Iceberg/MinIO + Trino  -- the vertical slice
+#   --profile gov     OPA + Marquez                          -- governance & lineage
+#   --profile orch    Airflow                                -- scheduling
+#   --profile console MOSAIC API + console UI                -- the demo surface
+#
+# Deferred per the GR1 scope decision: MongoDB source, Milvus, Prometheus/Grafana.
+# ==========================================================================
+x-common-env: &common-env
+  TZ: Asia/Ho_Chi_Minh
+
+networks:
+  mosaic:
+    driver: bridge
+
+volumes:
+  mysql-data:
+  postgres-data:
+  minio-data:
+  kafka-data:
+
+services:
+
+  # ------------------------------------------------------------------ SOURCES
+  mysql:
+    image: mysql:8.0
+    container_name: mosaic-mysql
+    environment:
+      <<: *common-env
+      MYSQL_ROOT_PASSWORD: rootpw
+      MYSQL_DATABASE: ecommerce_tx
+      MYSQL_USER: cdc
+      MYSQL_PASSWORD: cdcpw
+    # binlog_format=ROW + binlog_row_image=FULL are mandatory for Debezium.
+    command:
+      - --server-id=1
+      - --log-bin=mysql-bin
+      - --binlog_format=ROW
+      - --binlog_row_image=FULL
+      - --expire_logs_days=3
+      - --gtid_mode=ON
+      - --enforce_gtid_consistency=ON
+    volumes:
+      - mysql-data:/var/lib/mysql
+      - ../domains/ecommerce/ddl/mysql.sql:/docker-entrypoint-initdb.d/01_domain.sql:ro
+    ports: ["${MYSQL_PORT:-3306}:3306"]
+    networks: [mosaic]
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-prootpw"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+  postgres:
+    image: pgvector/pgvector:pg15   # PostgreSQL 15 with pgvector pre-installed
+    container_name: mosaic-postgres
+    environment:
+      <<: *common-env
+      POSTGRES_DB: ecommerce_md
+      POSTGRES_USER: cdc
+      POSTGRES_PASSWORD: cdcpw
+    # wal_level=logical is mandatory for Debezium logical replication.
+    command:
+      - postgres
+      - -c
+      - wal_level=logical
+      - -c
+      - max_replication_slots=4
+      - -c
+      - max_wal_senders=4
+      - -c
+      - wal_keep_size=512MB       # bounds WAL accumulation if Debezium lags
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      # 01 = domain data (a CDC source). 02 = platform metadata, in its own
+      # database so it is never captured by mosaic_pub.
+      - ../domains/ecommerce/ddl/postgres.sql:/docker-entrypoint-initdb.d/01_domain.sql:ro
+      - ../sql/platform.sql:/docker-entrypoint-initdb.d/02_platform.sql:ro
+    ports: ["${POSTGRES_PORT:-5432}:5432"]
+    networks: [mosaic]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cdc -d ecommerce_md"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+  # ---------------------------------------------------------------- INGESTION
+  kafka:
+    image: apache/kafka:3.7.0     # KRaft mode, no ZooKeeper
+    container_name: mosaic-kafka
+    environment:
+      <<: *common-env
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    ports: ["${KAFKA_PORT:-9092}:9092"]
+    networks: [mosaic]
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 20
+
+  schema-registry:
+    image: confluentinc/cp-schema-registry:7.6.0
+    container_name: mosaic-schema-registry
+    depends_on:
+      kafka: {condition: service_healthy}
+    environment:
+      <<: *common-env
+      SCHEMA_REGISTRY_HOST_NAME: schema-registry
+      SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: PLAINTEXT://kafka:9092
+      SCHEMA_REGISTRY_LISTENERS: http://0.0.0.0:8081
+    ports: ["${SCHEMA_REGISTRY_PORT:-8081}:8081"]
+    networks: [mosaic]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8081/subjects || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+  # Debezium runs as connectors inside Kafka Connect.
+  # NOTE: PII masking is configured on the connectors themselves, not as SMTs here.
+  # See docs/adr/0004-connector-native-masking.md for why.
+  kafka-connect:
+    # Debezium publishes patch tags only -- there is no plain `2.7`.
+    image: debezium/connect:2.7.3.Final
+    container_name: mosaic-connect
+    depends_on:
+      kafka: {condition: service_healthy}
+      schema-registry: {condition: service_healthy}
+      mysql: {condition: service_healthy}
+      postgres: {condition: service_healthy}
+    environment:
+      <<: *common-env
+      BOOTSTRAP_SERVERS: kafka:9092
+      GROUP_ID: mosaic-connect
+      CONFIG_STORAGE_TOPIC: _connect_configs
+      OFFSET_STORAGE_TOPIC: _connect_offsets   # Debezium source offsets = restart safety
+      STATUS_STORAGE_TOPIC: _connect_status
+      CONFIG_STORAGE_REPLICATION_FACTOR: 1
+      OFFSET_STORAGE_REPLICATION_FACTOR: 1
+      STATUS_STORAGE_REPLICATION_FACTOR: 1
+      KEY_CONVERTER: io.confluent.connect.avro.AvroConverter
+      VALUE_CONVERTER: io.confluent.connect.avro.AvroConverter
+      CONNECT_KEY_CONVERTER_SCHEMA_REGISTRY_URL: http://schema-registry:8081
+      CONNECT_VALUE_CONVERTER_SCHEMA_REGISTRY_URL: http://schema-registry:8081
+    ports: ["${CONNECT_PORT:-8083}:8083"]
+    networks: [mosaic]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8083/connectors || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+
+  # ------------------------------------------------------------------ STORAGE
+  minio:
+    image: minio/minio:RELEASE.2024-06-13T22-53-53Z
+    container_name: mosaic-minio
+    environment:
+      <<: *common-env
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    command: server /data --console-address ":9001"
+    volumes:
+      - minio-data:/data
+    ports: ["${MINIO_PORT:-9000}:9000", "${MINIO_CONSOLE_PORT:-9001}:9001"]
+    networks: [mosaic]
+    healthcheck:
+      test: ["CMD-SHELL", "mc ready local || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+  minio-init:
+    image: minio/mc:RELEASE.2024-06-12T14-34-03Z
+    container_name: mosaic-minio-init
+    depends_on:
+      minio: {condition: service_healthy}
+    entrypoint: ["/bin/sh", "-c", "mc alias set local http://minio:9000 minioadmin minioadmin && mc mb --ignore-existing local/mosaic && echo 'bucket s3://mosaic ready'"]
+    networks: [mosaic]
+    restart: "no"
+
+  # Iceberg catalog with git-like branching semantics.
+  # From GHCR, not Docker Hub: the Docker Hub mirror stopped at 0.76.6, while the
+  # 0.90.4 that GR1 Appendix B specifies is published on ghcr.io.
+  # No healthcheck: the image is built on a minimal base that does not ship curl or
+  # wget, so any in-container HTTP probe would fail forever and block dependents.
+  # Readiness is probed from the host instead (mosaic.py `up`).
+  nessie:
+    image: ghcr.io/projectnessie/nessie:0.90.4
+    container_name: mosaic-nessie
+    environment:
+      <<: *common-env
+      NESSIE_VERSION_STORE_TYPE: IN_MEMORY    # swap to ROCKSDB/JDBC for persistence
+    ports: ["${NESSIE_PORT:-19120}:19120"]
+    networks: [mosaic]
+
+  # --------------------------------------------------------------- PROCESSING
+  # Spark Structured Streaming: Debezium topics -> Iceberg Bronze (envelope intact).
+  # Silver and Gold are dbt-trino models -- see docs/adr/0003.
+  spark:
+    image: apache/spark:3.5.1
+    container_name: mosaic-spark
+    depends_on:
+      kafka: {condition: service_healthy}
+      nessie: {condition: service_started}
+    environment:
+      <<: *common-env
+      AWS_ACCESS_KEY_ID: minioadmin
+      AWS_SECRET_ACCESS_KEY: minioadmin
+      AWS_REGION: us-east-1
+    command: ["sleep", "infinity"]   # jobs submitted via spark-submit from scripts/
+    volumes:
+      - ../pipelines/bronze:/opt/mosaic/bronze:ro
+    networks: [mosaic]
+
+  # ------------------------------------------------------------------ SERVING
+  trino:
+    image: trinodb/trino:451
+    container_name: mosaic-trino
+    depends_on:
+      nessie: {condition: service_started}
+      minio: {condition: service_healthy}
+      mysql: {condition: service_healthy}
+      postgres: {condition: service_healthy}
+    volumes:
+      - ./trino/catalog:/etc/trino/catalog:ro
+    ports: ["${TRINO_PORT:-8090}:8080"]
+    networks: [mosaic]
+    healthcheck:
+      # /v1/info reports "starting":false once the coordinator will accept queries.
+      # The dot stands in for the quote character so the check needs no shell escaping.
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8080/v1/info | grep -q starting.:false || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+
+  # ------------------------------------------------- GOVERNANCE (--profile gov)
+  opa:
+    image: openpolicyagent/opa:0.66.0
+    container_name: mosaic-opa
+    profiles: [gov]
+    command: ["run", "--server", "--addr=0.0.0.0:8181", "/policies"]
+    volumes:
+      - ../platform/governance/policies:/policies:ro
+    ports: ["${OPA_PORT:-8181}:8181"]
+    networks: [mosaic]
+
+  marquez:
+    image: marquezproject/marquez:0.49.0
+    container_name: mosaic-marquez
+    profiles: [gov]
+    depends_on:
+      postgres: {condition: service_healthy}
+    environment:
+      <<: *common-env
+      MARQUEZ_PORT: 5000
+      MARQUEZ_ADMIN_PORT: 5001
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: marquez
+      POSTGRES_USER: cdc
+      POSTGRES_PASSWORD: cdcpw
+    ports: ["${MARQUEZ_PORT:-5000}:5000", "${MARQUEZ_ADMIN_PORT:-5001}:5001"]
+    networks: [mosaic]
+
+  # --------------------------------------------- ORCHESTRATION (--profile orch)
+  airflow:
+    image: apache/airflow:2.9.2
+    container_name: mosaic-airflow
+    profiles: [orch]
+    depends_on:
+      postgres: {condition: service_healthy}
+    environment:
+      <<: *common-env
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://cdc:cdcpw@postgres/airflow
+      # OpenLineage emission without editing DAG code (GR1 section 3.6).
+      AIRFLOW__OPENLINEAGE__TRANSPORT: '{"type":"http","url":"http://marquez:5000"}'
+      AIRFLOW__OPENLINEAGE__NAMESPACE: mosaic
+    command: ["standalone"]
+    volumes:
+      - ../pipelines:/opt/airflow/dags/pipelines:ro
+    ports: ["${AIRFLOW_PORT:-8080}:8080"]
+    networks: [mosaic]
+
+  # ---------------------------------------------------- DEMO (--profile console)
+  api:
+    build:
+      context: ..
+      dockerfile: docker/api.Dockerfile
+    container_name: mosaic-api
+    profiles: [console]
+    depends_on:
+      postgres: {condition: service_healthy}
+      trino: {condition: service_healthy}
+    environment:
+      <<: *common-env
+      MOSAIC_PLATFORM_DSN: postgresql://cdc:cdcpw@postgres:5432/mosaic_platform
+      MOSAIC_TRINO_URL: http://trino:8080
+      MOSAIC_CONNECT_URL: http://kafka-connect:8083
+      MOSAIC_DOMAINS_DIR: /app/domains
+    volumes:
+      - ../domains:/app/domains:ro
+    ports: ["${API_PORT:-8000}:8000"]
+    networks: [mosaic]

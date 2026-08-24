@@ -1,0 +1,49 @@
+id,name,parent_id,updated_at
+1,Outdoor & Hiking,,2026-02-28 03:27:56
+2,Backpack,1,2026-04-22 13:15:07
+3,Tent,1,2025-12-08 01:51:16
+4,Sleeping Bag,1,2026-08-10 10:16:27
+5,Trekking Pole,1,2026-03-22 07:48:02
+6,Headlamp,1,2026-07-17 02:53:40
+7,Kitchen & Dining,,2026-03-01 07:58:52
+8,Chef Knife,7,2025-11-04 23:43:53
+9,Cast-Iron Skillet,7,2025-10-05 13:32:57
+10,Stock Pot,7,2026-02-17 04:04:42
+11,Cutting Board,7,2026-08-12 19:18:05
+12,Espresso Maker,7,2026-01-12 17:21:55
+13,Audio & Headphones,,2025-11-28 14:40:13
+14,Over-Ear Headphone,13,2026-06-16 21:23:14
+15,Wireless Earbud,13,2026-03-09 06:58:41
+16,Bookshelf Speaker,13,2026-02-27 19:25:37
+17,Portable Speaker,13,2026-06-04 16:35:38
+18,Usb Microphone,13,2026-07-31 04:11:49
+19,Fitness & Training,,2026-01-08 00:19:46
+20,Yoga Mat,19,2026-04-23 12:28:48
+21,Kettlebell,19,2026-02-24 04:23:02
+22,Resistance Band Set,19,2025-10-04 23:02:54
+23,Foam Roller,19,2026-03-01 07:22:26
+24,Jump Rope,19,2026-02-23 11:36:24
+25,Office & Desk,,2026-06-12 10:10:49
+26,Standing Desk,25,2026-01-20 15:48:37
+27,Ergonomic Chair,25,2026-05-12 03:56:20
+28,Monitor Arm,25,2026-03-09 11:46:31
+29,Desk Lamp,25,2026-05-22 14:47:42
+30,Mechanical Keyboard,25,2025-11-27 06:28:23
+31,Pet Supplies,,2026-02-05 13:09:57
+32,Dog Harness,31,2026-07-22 13:08:47
+33,Cat Tree,31,2026-03-26 12:21:57
+34,Pet Carrier,31,2026-01-19 04:57:16
+35,Feeding Bowl,31,2026-07-24 02:48:50
+36,Grooming Brush,31,2025-10-18 20:25:19
+37,Garden & Outdoor Living,,2026-02-23 22:19:40
+38,Pruning Shear,37,2026-06-08 08:40:08
+39,Watering Can,37,2026-05-29 15:13:36
+40,Raised Planter,37,2025-11-22 13:04:18
+41,Garden Hose,37,2026-04-22 00:07:44
+42,Compost Bin,37,2025-09-29 21:56:40
+43,Baby & Toddler,,2026-02-08 16:00:51
+44,Stroller,43,2026-04-05 14:32:02
+45,High Chair,43,2025-10-07 19:51:46
+46,Baby Carrier,43,2025-11-01 08:47:23
+47,Night Light,43,2026-02-19 15:37:34
+48,Bottle Steriliser,43,2025-09-25 08:10:41
