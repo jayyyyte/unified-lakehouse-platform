@@ -3,7 +3,6 @@
   "config": {
     "connector.class": "io.debezium.connector.mysql.MySqlConnector",
     "tasks.max": "1",
-
     "database.hostname": "mysql",
     "database.port": "3306",
     "database.user": "cdc",
@@ -13,23 +12,19 @@
     "database.include.list": "ecommerce_tx",
     "table.include.list": "ecommerce_tx.orders,ecommerce_tx.order_items,ecommerce_tx.payments",
     "snapshot.mode": "initial",
-
     "schema.history.internal.kafka.bootstrap.servers": "kafka:9092",
     "schema.history.internal.kafka.topic": "_schema_history.mosaic.mysql",
-
     "_comment_masking": "Layer-1 PII masking. GR1 Appendix C used Kafka Connect MaskField/ReplaceField SMTs, which cannot address fields nested under the Debezium before/after envelope and therefore forced ExtractNewRecordState to run first -- which in turn destroys the envelope GR1 section 4.2 requires Bronze to preserve. Debezium's own connector-level masking has neither problem: it runs before the envelope is built, so it masks the before-image too. See docs/adr/0004-connector-native-masking.md.",
     "column.mask.hash.SHA-256.with.salt.mosaicPiiSalt": "ecommerce_tx.orders.buyer_email,ecommerce_tx.orders.buyer_phone",
     "column.exclude.list": "ecommerce_tx.payments.raw_card_number",
-
     "_comment_envelope": "No ExtractNewRecordState here. Bronze stores the unmodified change envelope (op, before, after, source) per GR1 section 4.2; flattening happens in the Bronze-to-Silver step where the before-image has already been archived.",
-
     "_comment_types": "decimal.handling.mode=string keeps DECIMAL(12,2) exact and human-readable instead of base64 bytes; Silver casts it back to decimal. time.precision.mode=connect avoids microsecond-int representations that Iceberg cannot map directly.",
     "decimal.handling.mode": "string",
     "time.precision.mode": "connect",
-
-    "key.converter": "io.confluent.connect.avro.AvroConverter",
-    "key.converter.schema.registry.url": "http://schema-registry:8081",
-    "value.converter": "io.confluent.connect.avro.AvroConverter",
-    "value.converter.schema.registry.url": "http://schema-registry:8081"
+    "_comment_converter": "JSON rather than Avro -- see docs/adr/0005-json-converter.md. schemas.enable=false keeps the Debezium envelope (op/before/after/source) intact while dropping the per-message Connect schema block.",
+    "key.converter": "org.apache.kafka.connect.json.JsonConverter",
+    "key.converter.schemas.enable": "false",
+    "value.converter": "org.apache.kafka.connect.json.JsonConverter",
+    "value.converter.schemas.enable": "false"
   }
 }
