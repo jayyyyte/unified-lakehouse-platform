@@ -173,10 +173,10 @@ def cmd_up(args) -> int:
     rc = compose("up", "-d", profiles=args.profile)
     if rc != 0:
         return rc
-    return wait_healthy(timeout=args.timeout)
+    return wait_healthy(timeout=args.timeout, profiles=args.profile)
 
 
-def wait_healthy(timeout: int = 300) -> int:
+def wait_healthy(timeout: int = 300, profiles: list[str] | None = None) -> int:
     """Block until every container with a healthcheck reports healthy.
 
     `docker compose up -d` returns as soon as containers are *started*, which is
@@ -184,13 +184,36 @@ def wait_healthy(timeout: int = 300) -> int:
     before it will accept a connector. Everything downstream depends on this
     distinction, so `up` does not return until it is actually true.
     """
-    print(f"\nwaiting for services to become healthy (timeout {timeout}s)...")
+    expected = _expected_services(profiles)
+    print(f"\nwaiting for {len(expected)} services to become healthy (timeout {timeout}s)...")
     deadline = time.time() + timeout
     last = ""
     while time.time() < deadline:
         rows = _service_states()
-        pending = [n for n, s in rows.items() if s not in ("healthy", "no-healthcheck", "exited")]
-        line = f"  healthy {len(rows) - len(pending)}/{len(rows)}"
+        pending, crashed = [], []
+        for svc in expected:
+            state, exit_code = rows.get(svc, ("missing", None))
+            if state == "healthy" or state == "running-no-healthcheck":
+                continue
+            if state == "exited":
+                # A one-shot task that finished cleanly is done, not broken.
+                (crashed if exit_code else []).append(f"{svc} (exit {exit_code})") \
+                    if exit_code else None
+                continue
+            pending.append(svc)
+
+        # A crashed service must never be mistaken for a healthy one. Earlier this
+        # loop counted only what `compose ps` still listed, so a container that died
+        # dropped out of the denominator and the wait reported success.
+        if crashed:
+            print(f"\nFAILED: {', '.join(crashed)}")
+            for entry in crashed:
+                svc = entry.split(" ")[0]
+                print(f"\n--- last 15 log lines: {svc} ---")
+                print("\n".join(compose_out("logs", "--tail", "15", svc).splitlines()[-15:]))
+            return 1
+
+        line = f"  healthy {len(expected) - len(pending)}/{len(expected)}"
         if pending:
             line += f"   waiting on: {', '.join(sorted(pending))}"
         if line != last:
@@ -206,9 +229,21 @@ def wait_healthy(timeout: int = 300) -> int:
     return 1
 
 
-def _service_states() -> dict[str, str]:
-    out = compose_out("ps", "--format", "json")
-    states: dict[str, str] = {}
+def _expected_services(profiles: list[str] | None = None) -> list[str]:
+    """Services compose would start, so a vanished container is still accounted for."""
+    out = subprocess.run(_compose_cmd(profiles) + ["config", "--services"],
+                         capture_output=True, text=True, env=docker_env()).stdout
+    return sorted(s.strip() for s in out.splitlines() if s.strip())
+
+
+def _service_states() -> dict[str, tuple[str, int | None]]:
+    """Per-service (state, exit_code), including containers that have exited.
+
+    `compose ps` without -a hides exited containers entirely, which is how a crashed
+    service used to disappear from the health tally instead of failing the wait.
+    """
+    out = compose_out("ps", "-a", "--format", "json")
+    states: dict[str, tuple[str, int | None]] = {}
     for line in out.splitlines():
         line = line.strip()
         if not line:
@@ -220,12 +255,13 @@ def _service_states() -> dict[str, str]:
         name = row.get("Service") or row.get("Name", "?")
         health = (row.get("Health") or "").lower()
         state = (row.get("State") or "").lower()
+        code = row.get("ExitCode")
         if state == "exited":
-            states[name] = "exited"
+            states[name] = ("exited", int(code) if code is not None else None)
         elif not health:
-            states[name] = "no-healthcheck" if state == "running" else state
+            states[name] = ("running-no-healthcheck" if state == "running" else state, None)
         else:
-            states[name] = health
+            states[name] = (health, None)
     return states
 
 
@@ -261,7 +297,9 @@ def cmd_status(args) -> int:
         return 0
     width = max(len(n) for n in states)
     for name in sorted(states):
-        print(f"  {name.ljust(width)}  {states[name]}")
+        state, code = states[name]
+        suffix = f" (exit {code})" if state == "exited" and code is not None else ""
+        print(f"  {name.ljust(width)}  {state}{suffix}")
     return 0
 
 
@@ -352,6 +390,117 @@ def cmd_check_abstraction(args) -> int:
         return 1
     print("PASS -- the generic core contains no domain vocabulary.")
     return 0
+
+
+# ---------------------------------------------------------------------- doctor
+def _exec(container: str, *cmd: str) -> str | None:
+    """Run a command in a container; None if it fails or the container is absent."""
+    r = subprocess.run([docker_bin(), "exec", container, *cmd],
+                       capture_output=True, text=True, env=docker_env())
+    return r.stdout.strip() if r.returncode == 0 else None
+
+
+def _mysql_q(sql: str) -> str | None:
+    return _exec("mosaic-mysql", "mysql", "-uroot", "-prootpw", "--batch",
+                 "--skip-column-names", "ecommerce_tx", "-e", sql)
+
+
+def _pg_q(sql: str, db: str = "ecommerce_md") -> str | None:
+    return _exec("mosaic-postgres", "psql", "-U", "cdc", "-d", db, "-tAc", sql)
+
+
+def cmd_doctor(args) -> int:
+    """One-shot state report: environment, stack, data, connectors.
+
+    Exists so a session can answer "where is everything?" with one command instead of
+    a dozen probes. Read docs/STATUS.md for what is *meant* to be true; this reports
+    what actually is.
+    """
+    checks: list[tuple[str, bool | None, str]] = []
+
+    def add(name, ok, detail=""):
+        checks.append((name, ok, detail))
+
+    add("docker binary", True, docker_bin())
+    daemon = subprocess.run([docker_bin(), "info", "--format", "{{.ServerVersion}}"],
+                            capture_output=True, text=True, env=docker_env())
+    up = daemon.returncode == 0
+    add("docker daemon", up, daemon.stdout.strip() if up else "not reachable -- start Docker Desktop")
+    if not up:
+        _render(checks)
+        return 1
+
+    states = _service_states()
+    if not states:
+        add("stack", False, "nothing running -- python mosaic.py up")
+        _render(checks)
+        return 1
+    bad = {n: s for n, (s, c) in states.items()
+           if not (s in ("healthy", "running-no-healthcheck") or (s == "exited" and not c))}
+    add("stack health", not bad,
+        f"{len(states) - len(bad)}/{len(states)} ok" + (f"  degraded: {', '.join(bad)}" if bad else ""))
+
+    binlog = _mysql_q("SELECT CONCAT(@@binlog_format,'/',@@binlog_row_image,'/',@@gtid_mode)")
+    add("mysql cdc prereqs", binlog == "ROW/FULL/ON", binlog or "unreachable")
+
+    wal = _pg_q("SELECT current_setting('wal_level')||'/'||"
+                "COALESCE((SELECT pubname FROM pg_publication LIMIT 1),'no-publication')")
+    add("postgres cdc prereqs", wal == "logical/mosaic_pub", wal or "unreachable")
+
+    pg_tables = _pg_q("SELECT count(*) FROM pg_tables WHERE schemaname='public'")
+    plat = _pg_q("SELECT count(*) FROM information_schema.tables "
+                 "WHERE table_schema='platform'", db="mosaic_platform")
+    add("schemas", bool(pg_tables) and bool(plat),
+        f"postgres public: {pg_tables} tables | platform: {plat} tables")
+
+    cats = _exec("mosaic-trino", "trino", "--execute", "SHOW CATALOGS")
+    cat_list = sorted(c.strip('"') for c in (cats or "").splitlines() if c.startswith('"'))
+    add("trino catalogs", len(cat_list) >= 4, ", ".join(cat_list) or "unreachable")
+
+    # Seed volume, per source.
+    pg_rows = _pg_q("SELECT (SELECT count(*) FROM products)||' products, '||"
+                    "(SELECT count(*) FROM users)||' users'")
+    my_rows = _mysql_q("SELECT CONCAT((SELECT count(*) FROM orders),' orders, ',"
+                       "(SELECT count(*) FROM order_items),' items')")
+    seeded = bool(pg_rows) and not pg_rows.startswith("0 ")
+    add("seed data", seeded, f"{pg_rows or '?'} | {my_rows or '?'}"
+        if seeded else "empty -- python mosaic.py generate && python -m tools.seed.load")
+
+    try:
+        _, names = http(f"http://localhost:{host_port('CONNECT_PORT')}/connectors")
+        if names:
+            detail = []
+            for n in names:
+                _, st = http(f"http://localhost:{host_port('CONNECT_PORT')}/connectors/{n}/status")
+                tasks = "/".join(t["state"] for t in st.get("tasks", [])) or "no-tasks"
+                detail.append(f"{n}={st['connector']['state']}:{tasks}")
+            add("debezium connectors", all("RUNNING" in d for d in detail), " | ".join(detail))
+        else:
+            add("debezium connectors", None, "none registered -- python mosaic.py connectors")
+    except (urllib.error.URLError, OSError) as e:
+        add("debezium connectors", False, f"Connect unreachable ({e})")
+
+    # Reuse the real gate rather than reimplementing it.
+    import io, contextlib
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        gate = cmd_check_abstraction(None)
+    add("abstraction gate", gate == 0,
+        "platform/ is domain-free" if gate == 0 else "LEAKED -- see check-abstraction")
+
+    return _render(checks)
+
+
+def _render(checks) -> int:
+    width = max(len(n) for n, _, _ in checks)
+    failed = 0
+    for name, ok, detail in checks:
+        mark = {True: "ok  ", False: "FAIL", None: "--  "}[ok]
+        failed += ok is False
+        print(f"  {mark}  {name.ljust(width)}  {detail}")
+    print(f"\n  {'all checks passed' if not failed else f'{failed} check(s) failing'}"
+          f"   |   intended state: docs/STATUS.md")
+    return 1 if failed else 0
 
 
 # ------------------------------------------------------------------ port check
@@ -449,6 +598,10 @@ def main() -> int:
     cn = sub.add_parser("connectors", help="register Debezium connectors for a domain")
     cn.add_argument("--domain", default="ecommerce")
     cn.set_defaults(func=cmd_connectors)
+
+    sub.add_parser("doctor",
+                   help="one-shot state report: environment, stack, data, connectors"
+                   ).set_defaults(func=cmd_doctor)
 
     sub.add_parser("check-ports",
                    help="report host port collisions before they cost a pull"

@@ -16,3 +16,4 @@ experiments/results/*.png
 
 # docker/.env carries host port overrides and is meant to be committed.
 !docker/.env
+CLAUDE.md
