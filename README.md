@@ -9,6 +9,10 @@ the system that report specifies, plus the components that carry its novelty.
 **Start here:** [`docs/PROBLEM.md`](docs/PROBLEM.md) — the one concrete failure this platform
 exists to fix, and the four-rung ladder from that failure to a domain-generic platform.
 
+Working on the code? [`CLAUDE.md`](CLAUDE.md) carries the durable context and the
+environment gotchas; [`docs/STATUS.md`](docs/STATUS.md) says what is actually built and
+verified right now. `python mosaic.py doctor` reports live state in one command.
+
 ---
 
 ## The short version
@@ -114,6 +118,10 @@ is built and has neither problem.
 
 Deferred, per GR1's own scope-decision record: MongoDB as a third source, Milvus, and the
 Prometheus/Grafana observability stack.
+
+**[`docs/CHANGES-FROM-GR1.md`](docs/CHANGES-FROM-GR1.md) is the complete record** of every
+deviation -- findings, substitutions, additions, and defects found inside the GR1 report
+itself -- written to be read directly while drafting the GR2 report.
 
 ## Status
 

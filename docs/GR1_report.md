@@ -256,7 +256,7 @@ MOSAIC adopts a layered lakehouse architecture, in which ingestion, processing, 
 
 Figure 4.1 presents the resulting reference architecture. Data flows from the two relational sources through Debezium connectors into Kafka topics, where Kafka Connect Single Message Transforms apply the first, irreversible layer of PII masking before any record is persisted; Spark Structured Streaming then reads these topics, normalizes the Debezium change envelope, and writes into the Iceberg medallion layers on MinIO, while Airflow orchestrates the batch transformations, quality gates, and Iceberg maintenance jobs that operate on top of this flow. Trino serves federated SQL queries against both the Iceberg tables and the live relational sources, pgvector serves semantic-similarity queries against the embeddings generated from the Gold-layer product catalog, and Ranger together with DataHub enforce access control, masking, and lineage across every layer.
 
-![Figure 4.1 - Overall reference architecture of the MOSAIC platform](GR1_report_fixed_assets/figure-4-1.png)
+![Figure 4.1 - Overall reference architecture of the MOSAIC platform](figure-4-1.png)
 
 *Figure 4.1: Overall reference architecture of the MOSAIC platform.*
 
@@ -300,7 +300,7 @@ The domain selected for the reference implementation is electronic commerce, bec
 PostgreSQL plays a dual role in this design: it is simultaneously a CDC source for master data and, through the pgvector extension, the vector store for semantic search, as discussed in Section 3.4. The complete data definition language for both sources is provided in Appendix A; Figure 4.2 presents the corresponding entity–relationship diagram.
 
 
-![Figure 4.2 - Entity-relationship diagram of the e-commerce reference domain](GR1_report_fixed_assets/figure-4-2.png)
+![Figure 4.2 - Entity-relationship diagram of the e-commerce reference domain](figure-4-2.png)
 
 *Figure 4.2: Entity-relationship diagram of the e-commerce reference domain.*
 
