@@ -9,6 +9,9 @@ project needs to run. A thin Makefile delegates here for platforms that have it.
     python mosaic.py up --profile gov   add governance (OPA + Marquez)
     python mosaic.py status             health of every running service
     python mosaic.py connectors         register Debezium connectors
+    python mosaic.py cdc-verify         check masking/envelope on the Kafka topics
+    python mosaic.py loadgen            continuous OLTP write load
+    python mosaic.py stockout --top 3   force the L0 failure condition
     python mosaic.py check-abstraction  the L3 domain-purity gate
     python mosaic.py down / clean       stop / stop and destroy volumes
 """
@@ -561,6 +564,49 @@ def cmd_generate(args) -> int:
     return run(cmd, cwd=str(ROOT))
 
 
+# ------------------------------------------------------------ live workload
+def _tool(module: str, *args: str) -> int:
+    return run([sys.executable, "-m", module, *args], cwd=str(ROOT))
+
+
+def cmd_loadgen(args) -> int:
+    """Continuous OLTP writes -- what manufactures the freshness asymmetry."""
+    argv = ["start", "--rate", str(args.rate), "--duration", str(args.duration),
+            "--max-lag", str(args.max_lag)]
+    if args.seed is not None:
+        argv += ["--seed", str(args.seed)]
+    return _tool("tools.loadgen.run", *argv)
+
+
+def cmd_stockout(args) -> int:
+    """Force products out of stock: the L0 switch from docs/PROBLEM.md."""
+    argv = ["stockout"]
+    for pid in args.product_id or []:
+        argv += ["--product-id", str(pid)]
+    if args.random:
+        argv += ["--random", str(args.random)]
+    elif not args.product_id:
+        argv += ["--top", str(args.top)]
+    return _tool("tools.loadgen.run", *argv)
+
+
+def cmd_restock(args) -> int:
+    argv = ["restock", "--qty", str(args.qty)]
+    for pid in args.product_id or []:
+        argv += ["--product-id", str(pid)]
+    if args.last:
+        argv += ["--last", str(args.last)]
+    return _tool("tools.loadgen.run", *argv)
+
+
+def cmd_cdc_verify(args) -> int:
+    """Check the Kafka topics against what the connectors promised."""
+    argv = ["--domain", args.domain, "--messages", str(args.messages)]
+    if args.require_update:
+        argv.append("--require-update")
+    return _tool("tools.cdc.verify", *argv)
+
+
 # ------------------------------------------------------------------- shells
 def cmd_sql(args) -> int:
     return compose("exec", "trino", "trino")
@@ -617,6 +663,34 @@ def main() -> int:
     ge.add_argument("--now", default=None,
                     help="pin the clock anchor for a byte-reproducible corpus")
     ge.set_defaults(func=cmd_generate)
+
+    lgen = sub.add_parser("loadgen", help="continuous OLTP write load")
+    lgen.add_argument("--rate", type=float, default=10.0, help="operations per second")
+    lgen.add_argument("--duration", type=int, default=0, help="seconds; 0 = until ctrl-c")
+    lgen.add_argument("--seed", type=int, default=None)
+    lgen.add_argument("--max-lag", type=int, default=2000)
+    lgen.set_defaults(func=cmd_loadgen)
+
+    so = sub.add_parser("stockout",
+                        help="force products out of stock -- the L0 reproducer")
+    so.add_argument("--product-id", type=int, action="append", help="repeatable")
+    so.add_argument("--top", type=int, default=1, help="N best-selling products")
+    so.add_argument("--random", type=int, default=0, help="N random in-stock products")
+    so.set_defaults(func=cmd_stockout)
+
+    rs = sub.add_parser("restock", help="undo a stock-out")
+    rs.add_argument("--product-id", type=int, action="append")
+    rs.add_argument("--last", type=int, default=0, help="the last N manual stock-outs")
+    rs.add_argument("--qty", type=int, default=100)
+    rs.set_defaults(func=cmd_restock)
+
+    cv = sub.add_parser("cdc-verify",
+                        help="check Kafka topics against what the connectors declared")
+    cv.add_argument("--domain", default="ecommerce")
+    cv.add_argument("--messages", type=int, default=300)
+    cv.add_argument("--require-update", action="store_true",
+                    help="fail unless an UPDATE before image was inspected")
+    cv.set_defaults(func=cmd_cdc_verify)
 
     sub.add_parser("sql", help="Trino CLI").set_defaults(func=cmd_sql)
     ps = sub.add_parser("psql", help="PostgreSQL shell")

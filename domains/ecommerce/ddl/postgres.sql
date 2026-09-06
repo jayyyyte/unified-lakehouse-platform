@@ -66,6 +66,21 @@ CREATE INDEX IF NOT EXISTS idx_prod_emb_hnsw
 -- ---- CDC heartbeat sink (advances confirmed_flush_lsn; guards WAL bloat) ----
 CREATE TABLE IF NOT EXISTS cdc_heartbeat (ts TIMESTAMPTZ NOT NULL);
 
+-- ---- before images (REPLICA IDENTITY) ----
+-- PostgreSQL's default replica identity puts only the primary key in the WAL for an
+-- UPDATE, so Debezium emits `before: null` and there is no before image at all. Two
+-- things in this project depend on there being one:
+--   * GR1 section 4.2 requires Bronze to store the unmodified change envelope, and an
+--     envelope whose `before` is always null is not that envelope.
+--   * ADR 0004's whole argument is that connector-native masking covers the before
+--     image where an SMT chain does not -- unprovable on a source that has none.
+-- FULL logs the entire old row, which costs WAL volume. That cost is accepted here for
+-- the three tables whose previous state is actually read: PII (users), the fast-moving
+-- fact the L0 failure turns on (inventory), and price history (products).
+ALTER TABLE users     REPLICA IDENTITY FULL;
+ALTER TABLE products  REPLICA IDENTITY FULL;
+ALTER TABLE inventory REPLICA IDENTITY FULL;
+
 -- ---- CDC replication user & logical publication ----
 -- Debezium requires REPLICATION and a publication for pgoutput.
 ALTER USER cdc WITH REPLICATION;
