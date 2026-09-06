@@ -1,6 +1,6 @@
 # Implementation status
 
-**Last updated:** 2026-08-25 | **Current milestone:** M1 (partially done) | **Next action:** register Debezium connectors, then build the load generator
+**Last updated:** 2026-08-28 | **Current milestone:** M1 **done, verified** | **Next action:** M2 -- restart-safety demo (kill Connect mid-stream, prove offsets resume)
 
 Fastest way to see real state: `python mosaic.py doctor`.
 
@@ -18,7 +18,7 @@ non-obvious findings under *Findings*, not just in commit messages.
 | | Milestone | State |
 |---|---|---|
 | **M0** | Problem spec, skeleton, stack definition | **done, verified** |
-| **M1** | Sources, seed corpus, load generator | **in progress** — generator + loader done; load generator not started |
+| **M1** | Sources, seed corpus, load generator | **done, verified** — CDC live on both sources, masking proven, load generator + stock-out lever running |
 | M2 | CDC ingestion + restart-safety demo | not started |
 | M3 | Medallion on Iceberg (Spark Bronze, dbt-trino Silver/Gold) | not started |
 | M4 | Trino federation + embedding pipeline | catalogs done in M0; embeddings not started |
@@ -47,6 +47,11 @@ Confirmed by an actual run, not by inspection.
 | Federation | Trino → live PostgreSQL returns the domain tables |
 | Abstraction gate | `check-abstraction` passes (6 files scanned) |
 | Kafka Connect | starts and stays healthy with the JSON converter (ADR 0005) |
+| Debezium connectors | both registered first try, `connector=RUNNING tasks=RUNNING` |
+| CDC topics | all 7 present; snapshot delivered every seeded row |
+| PII masking | `cdc-verify` passes on both sources, before **and** after images |
+| Load generator | 25 ops/s for 45 s, row-count delta matched exactly on all 4 tables |
+| Stock-out lever | `before.stock_qty=192 -> after.stock_qty=0` observed on the Kafka topic |
 
 **Seed corpus** — generated and bulk-loaded at `small`, all 7 tables matching `manifest.json`.
 
@@ -61,12 +66,11 @@ Semantic clustering spot-checked — "waterproof hiking backpack" retrieves outd
 
 ## Written but NOT yet executed
 
-- `python mosaic.py connectors` — Debezium connector registration has never been run.
-  The configs in `domains/ecommerce/connectors/` are valid JSON but unproven against a
-  live Debezium 2.7.3. **Expect the first run to surface config issues** — particularly
-  the connector-native masking properties from ADR 0004, which replaced the SMT chain and
-  have not been exercised.
-- `tools/seed/load.py --truncate` path has run; the load generator does not exist yet.
+Nothing from M1. The items that were listed here on 2026-08-25 -- Debezium registration and the
+load generator -- have both been run; results below.
+
+Still unexecuted and belonging to later milestones: the `gov`, `orch` and `console` profiles,
+every Spark job, and every dbt model.
 
 ## Current runtime state
 
@@ -102,6 +106,21 @@ but **does not exist yet** — that profile will fail to build until M6/M8.
    health tally built from it silently drops a crashed service and reports success. This
    produced one false "all services healthy". `mosaic.py` now diffs against
    `compose config --services` and reads exit codes from `ps -a`.
+6. **PostgreSQL emits no before image under the default replica identity** (M1). GR1 §4.2
+   requires Bronze to keep the before/after envelope; Appendix A.2's DDL never sets a replica
+   identity, so `before` is `null` on every PostgreSQL UPDATE and the requirement is
+   unsatisfiable for half the system. MySQL was fine -- Appendix B sets `binlog_row_image=FULL`
+   and there is no PostgreSQL counterpart. Fixed with `REPLICA IDENTITY FULL` on three tables.
+   See CHANGES-FROM-GR1 §A6. Strong report material: *a requirement that holds on one source
+   and silently does not on another.*
+7. **Debezium truncates a mask hash to the source column's width** (M1). `buyer_phone
+   VARCHAR(32)` gets 32 hex chars, not 64; nothing warns. Still a one-way digest, but the
+   strength of the mask turns out to be a property of the source DDL. See §A7.
+8. **A load generator that reports its send rate is lying.** One run reported 549 ops/s while
+   MySQL was committing it 152 s later; an earlier one silently lost 5,327 orders when the
+   client was killed mid-drain. Both were caught only by re-counting rows afterwards. The
+   generator now throttles against committed rows and reports *sent* and *sustained*
+   separately. **~100 ops/s sustained** here, bounded by per-commit fsync under Docker Desktop.
 
 ## Open questions
 
@@ -121,16 +140,36 @@ but **does not exist yet** — that profile will fail to build until M6/M8.
 - `python mosaic.py doctor` — one-shot state report (environment, stack, schemas, catalogs,
   seed volume, connectors, abstraction gate). Use it instead of a dozen probe commands.
 - `python mosaic.py check-ports` — host port collisions with the owning container named.
+- `python mosaic.py cdc-verify [--require-update]` — checks the Kafka topics against what the
+  connectors *declared*, deriving expectations from the connector JSON (so it works for any
+  domain). Samples the topic **tail**: reading from the beginning returns only snapshot events,
+  where `before` is always null and the masking check that matters can never fire.
+- `python mosaic.py loadgen --rate N --duration S` — continuous OLTP write mix across both
+  sources. Verifies its own effects by re-counting rows.
+- `python mosaic.py stockout --top 3` / `restock --last 3` — the L0 lever. Every event, pulled
+  or organic, is appended to `experiments/results/stockout_events.jsonl` with the source commit
+  timestamp, which is what E1/E3 read to know when the clock started.
 - `CLAUDE.md` — durable context and the environment gotchas that each cost a failed run.
 - `docs/CHANGES-FROM-GR1.md` — every deviation from the GR1 report, why, and with evidence.
 
 ## Immediate next steps
 
-1. `python mosaic.py connectors` — register both Debezium connectors; confirm the initial
-   snapshot lands the seeded rows into Kafka topics, and that ADR 0004's masking actually
-   masks (check `before` **and** `after` images for hashed email/phone, and that
-   `national_id` / `raw_card_number` are absent entirely).
-2. Load generator (`tools/loadgen/`) — continuous OLTP writes plus the **stock-out
-   injection lever**. This is what manufactures the freshness asymmetry the whole thesis
-   measures, so it is a first-class deliverable, not a test fixture.
-3. That closes M1 and sets up M2's restart-safety demo.
+M1 is closed. M2 is the restart-safety demo:
+
+1. Kill `kafka-connect` mid-stream while `loadgen` is running, restart it, and show that
+   `_connect_offsets` resumes exactly where it stopped -- no gap, no duplicate beyond
+   at-least-once. The load generator's row-count check is the ground truth to compare against.
+2. Same test for the PostgreSQL replication slot: confirm `confirmed_flush_lsn` advances and
+   that the heartbeat (`heartbeat.interval.ms=10000`) keeps it advancing while the captured
+   tables are idle -- the WAL-bloat guard from GR1 §4.4 has never been exercised under a real
+   stall.
+3. Then M3: Spark Bronze into Iceberg on Nessie, which is where the `spark-submit` jar set and
+   the `MERGE INTO` write path (the main technical risk) get proven.
+
+### A caveat to carry into M2
+
+With `loadgen` running, the seed corpus's deliberately empty stock slice (3% of products) is
+replenished within a few minutes -- replenishment waits `RESTOCK_LEAD_SECONDS` (300 s), then
+refills anything low. Organic stock-outs still occur, but at `small` scale draining a head
+product from ~250 units takes ~20 minutes at 25 ops/s. **For an on-demand failure, use
+`stockout`; do not wait for one to happen.**

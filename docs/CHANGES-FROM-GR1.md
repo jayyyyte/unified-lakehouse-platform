@@ -2,7 +2,7 @@
 
 **A complete record of how the implementation differs from `GR1_report.md`, and why.**
 
-Last updated: 2026-08-25 · Covers milestones M0–M1
+Last updated: 2026-08-28 · Covers milestones M0–M1 (M1 complete)
 
 > **Source verified.** Every claim here was checked against **`GR1_report.pdf`** (49 pages),
 > not only against the Markdown conversion. Page numbers below refer to the PDF.
@@ -46,6 +46,8 @@ and C — and discovering that is exactly what GR2 is for.
 | A3 | Image tag `debezium/connect:2.7` does not exist | Finding | — |
 | A4 | Image tag `projectnessie/nessie:0.90.4` is not on Docker Hub | Finding | — |
 | A5 | The Nessie image cannot run an HTTP healthcheck (no curl/wget) | Finding | — |
+| A6 | PostgreSQL emits **no before image** under the default replica identity, so §4.2's envelope is unsatisfiable for that source as Appendix A stands | Finding | [0004](adr/0004-connector-native-masking.md) |
+| A7 | Debezium **silently truncates the mask hash to the source column's width** — a narrow column yields a partial digest | Finding | [0004](adr/0004-connector-native-masking.md) |
 | B1 | Apache Ranger → Open Policy Agent | Substitution | [0001](adr/0001-opa-instead-of-ranger.md) |
 | B2 | DataHub → OpenLineage + Marquez | Substitution | [0002](adr/0002-marquez-instead-of-datahub.md) |
 | B3 | Spark (Silver/Gold) + Great Expectations → dbt-trino | Substitution | [0003](adr/0003-dbt-trino-for-silver-gold.md) |
@@ -68,6 +70,7 @@ and C — and discovering that is exactly what GR2 is for.
 | D7 | Explicit `decimal.handling.mode` and `time.precision.mode` | Operational | — |
 | D8 | No `ExtractNewRecordState` at the connector | Operational | (see A1) |
 | D9 | MySQL bulk load runs as `root`, not `cdc` | Operational | — |
+| D10 | `REPLICA IDENTITY FULL` on `users`, `products`, `inventory` | Operational | (see A6) |
 
 ---
 
@@ -318,6 +321,99 @@ probed **from the host**, where curl exists. Verified:
 $ curl -fsS http://localhost:19120/api/v2/config
 { "defaultBranch": "main", "maxSupportedApiVersion": 2, "specVersion": "2.1.0", ... }
 ```
+
+---
+
+## A6. PostgreSQL sends no before image, so §4.2's envelope cannot hold for that source
+
+**GR1 §4.2** requires Bronze to store *"the unmodified Debezium change envelope, including the
+before/after row state."* **GR1 Appendix A.2** gives the PostgreSQL DDL, and it never sets a
+replica identity — so every table keeps PostgreSQL's default.
+
+**What that default means:** for an `UPDATE`, PostgreSQL writes only the *primary key* of the
+old row into the WAL. There is nothing else for logical decoding to hand over, so Debezium
+emits:
+
+```json
+{"op": "u", "before": null, "after": { ... }}
+```
+
+**`before` is null on every PostgreSQL update.** Observed directly: `mosaic.postgres.public.products`
+and `.inventory` each returned 300 events with `op=u` and **0 before images**, while
+`mosaic.mysql.ecommerce_tx.orders` — same platform, same connector family — returned 79 update
+events with 79 before images. MySQL's `binlog_row_image=FULL` (which Appendix B *does* set)
+has no PostgreSQL counterpart in Appendix A.
+
+**Why it matters twice over:**
+
+1. §4.2's envelope requirement is simply unsatisfiable for the PostgreSQL half of the system.
+   Bronze would store a permanently half-empty envelope and nobody would notice, because a
+   null `before` looks like a valid absence rather than a missing capability.
+2. **ADR 0004's central claim becomes unprovable on that source.** The argument against SMT
+   masking is that it leaks the *before* image of PII updates. On a source that emits no
+   before image, neither approach can be distinguished — the evidence has to come from MySQL,
+   or the replica identity has to change.
+
+**Fix:** `ALTER TABLE ... REPLICA IDENTITY FULL` on the three tables whose previous state is
+actually read — `users` (PII, so the masking claim is testable), `inventory` (the fast-moving
+fact the L0 failure turns on) and `products` (price history). Now in
+`domains/ecommerce/ddl/postgres.sql`.
+
+**Cost, stated honestly:** `FULL` writes the entire old row into the WAL on every UPDATE and
+DELETE, so WAL volume grows with row width. That is why it is applied to three named tables
+rather than to the whole schema.
+
+**Evidence after the fix** — the same lever, end to end, `python mosaic.py stockout`:
+
+```json
+{"op": "u",
+ "before": {"product_id": 29, "stock_qty": 192, "warehouse": "SIN-01"},
+ "after":  {"product_id": 29, "stock_qty": 0,   "warehouse": "SIN-01"},
+ "source_ts_ms": 1787889547921}
+```
+
+That is the L0 event with its previous state intact and a source commit timestamp — exactly
+what N1 will read as `last_cdc(d)`.
+
+---
+
+## A7. Connector-native masking truncates the hash to the source column's width
+
+**Not stated in GR1** — Appendix C uses SMTs, and this behaviour belongs to the connector-native
+mechanism that replaced them (ADR 0004). It is recorded because it is silent, and because the
+obvious verification ("is it a SHA-256 hash?") reports a **false failure** if you do not know it.
+
+Two columns, one masking rule (`column.mask.hash.SHA-256.with.salt.mosaicPiiSalt`):
+
+| Source column | Declared type | Hash emitted |
+|---|---|---|
+| `orders.buyer_email` | `VARCHAR(255)` | `43883ab2…08082` — **64 hex chars**, the full digest |
+| `orders.buyer_phone` | `VARCHAR(32)` | `1e3ebf29…2736c` — **32 hex chars**, half the digest |
+| `users.phone` (PostgreSQL) | `TEXT` | 64 hex chars, full digest |
+
+Debezium shortens the hash to the declared width of the column it replaces. No warning is
+logged; the value still *looks* like a hash.
+
+**What it does and does not mean.** The value remains a one-way salted digest, so no plaintext
+reaches Kafka and Table 4.5's guarantee holds. But the property is now width-dependent: a
+`VARCHAR(10)` PII column would yield a 40-bit digest, and for a low-entropy, fixed-format value
+such as a national phone number, that is within brute-force reach of anyone holding the salt.
+**The strength of the mask is a property of the source DDL, not of the masking configuration** —
+which is exactly the kind of coupling a reviewer should be told about rather than left to find.
+
+**How it is handled here:** `tools/cdc/verify.py` reads `character_maximum_length` from
+`information_schema` at verification time and expects `min(64, width)` hex characters, so a
+truncated mask is *reported* rather than silently accepted:
+
+```
+NOTE: buyer_phone is narrower than a SHA-256 digest, so the mask is truncated
+      to 32 hex chars (128 bits)
+```
+
+`buyer_phone` is left at `VARCHAR(32)` deliberately: Appendix A's schema is kept faithful, 128
+bits is not a practical weakness, and the finding is more useful to the report than the fix
+would be. Widening a masked column to 64 characters is the remedy where full-digest strength
+is required.
 
 ---
 
@@ -657,9 +753,36 @@ shows the name while ranking uses the description embedding, so correct retrieva
 corpus. An early version read the wall clock at module level, so the same seed produced
 different timestamps every run — caught by a byte-comparison check that now guards it.
 
-**The load generator** (still to build) drives continuous OLTP writes plus the **stock-out
-injection lever**. It is what *manufactures* the freshness asymmetry the entire thesis
-measures, so it is a deliverable, not a test fixture.
+**The load generator** (`tools/loadgen/`, built in M1) drives continuous OLTP writes plus the
+**stock-out injection lever**. It is what *manufactures* the freshness asymmetry the entire
+thesis measures, so it is a deliverable, not a test fixture.
+
+Three things it had to get right, each of which was wrong first:
+
+*Replenishment is triggered by a low level and has a lead time.* The first version topped up
+whichever product was popular, regardless of level. Since demand removes 1-3 units and a
+replenishment adds 20-200, stock on the head of the catalogue inflated without bound — 2,664
+units against a 500-unit seed — and **nothing could ever sell out organically**, which is the
+one behaviour the corpus exists to produce. The second version replenished anything low
+*immediately*, and erased the seed's deliberately-empty slice within a minute. Real
+replenishment waits: a product that sells out stays out for `RESTOCK_LEAD_SECONDS`, and **that
+interval is precisely the window in which a stale ranking is confidently wrong.**
+
+*The reported throughput has to be a rate the source sustained, not a rate Python emitted.*
+Statements are written into a pipe, so an unthrottled generator reports whatever the sender
+managed. One run reported 549 ops/s while MySQL was still committing that work **152 seconds
+later**, and an earlier run silently lost 5,327 orders when the client was killed mid-drain.
+The generator now measures committed rows on a separate connection, throttles against that,
+and prints *sent* and *sustained* rates separately. Measured on this machine: **~100 ops/s
+sustained**, bounded by per-commit fsync under Docker Desktop.
+
+*Effects are read back, never assumed.* Every run ends by re-counting rows in both engines and
+comparing against what it sent. That check is what caught both defects above; without it the
+run reported success twice.
+
+*Nothing in the mix touches `products.name` or `products.description`.* The semantic channel's
+inputs are held still on purpose, so a stale hit can be attributed to the freshness asymmetry
+alone rather than to the text having changed underneath the embedding.
 
 ---
 
@@ -727,7 +850,8 @@ before submitting GR2 — an examiner will notice.
 ## F1. Eight broken cross-references to a section that does not exist
 
 The report refers **eight times** to a scope-decision record and renders each one as a
-literal `??`, because the LaTeX `ef` points at a label that was never defined:
+literal `??`, because the LaTeX `
+ef` points at a label that was never defined:
 
 | PDF page | Context |
 |---|---|

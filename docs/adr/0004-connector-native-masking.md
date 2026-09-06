@@ -74,6 +74,56 @@ same nesting limitation. GR1 §4.4's goal — one ISO-8601 representation across
 PostgreSQL — is met in the Bronze-to-Silver transform instead, which is where type normalisation
 already happens.
 
+## Verification (2026-08-28) — what was actually observed
+
+The decision above was made from the documentation. It has now been run. `python mosaic.py
+cdc-verify` derives its expectations from the connector config itself and samples the *tail* of
+each topic, so it inspects live change events rather than the initial snapshot.
+
+Against 300 sampled messages per topic, after `python mosaic.py loadgen`:
+
+| Claim | Evidence |
+|---|---|
+| Envelope intact | every message carries `op` / `before` / `after` / `source`; no `ExtractNewRecordState` |
+| `after` masked | 754 masked values checked on `orders`, 674 on `users` — all hex digests |
+| **`before` masked** | **502 before images inspected across both sources, all masked** |
+| Excluded columns absent | `payments.raw_card_number` and `users.national_id` absent from 637 images — not null, absent |
+
+The before-image case, which is the entire argument of this ADR, on a PII `UPDATE`:
+
+```json
+{"op": "u",
+ "before": {"id": 6427, "full_name": "Dang Khanh",
+            "email": "4cd0afef…0c618c", "phone": "252b376c…8a45157", "region": "north"},
+ "after":  {"id": 6427, "full_name": "Dang Khanh",
+            "email": "4cd0afef…0c618c", "phone": "67118265…4033879", "region": "south"}}
+```
+
+The phone changed, so the two hashes differ — and **both** are hashed. Under Appendix C's SMT
+chain the `before` side of this record would have carried the previous phone number in
+plaintext. `national_id` appears in neither image.
+
+## Two things the running system revealed that the documentation did not
+
+**1. The hash is truncated to the source column's width.** `orders.buyer_phone VARCHAR(32)`
+receives 32 hex characters — half a SHA-256 digest — while `orders.buyer_email VARCHAR(255)`
+receives all 64. Nothing is logged. The value is still a one-way salted digest, so §4.6's
+guarantee holds, but **the strength of the mask depends on the source DDL**, and a narrow PII
+column would silently produce a weak one. `tools/cdc/verify.py` reads the column width from
+`information_schema` and expects `min(64, width)`, reporting truncation rather than accepting
+it. Full detail: CHANGES-FROM-GR1 §A7.
+
+**2. On PostgreSQL there was no before image to mask at all.** Under the default replica
+identity, PostgreSQL logs only the primary key of the old row, so Debezium emits
+`before: null` on every UPDATE — making this ADR's claim untestable on that source and GR1
+§4.2's envelope requirement unsatisfiable there. Fixed by `REPLICA IDENTITY FULL` on `users`,
+`products` and `inventory` in `domains/ecommerce/ddl/postgres.sql`. Full detail:
+CHANGES-FROM-GR1 §A6.
+
+Both are worth stating in the GR2 report: the first shows that a masking guarantee can be
+weakened by a schema decision made elsewhere, and the second that a design requirement can be
+unsatisfiable on one source and satisfiable on another with no warning from either.
+
 ## Reference retained
 
 Appendix C's original SMT configuration is kept verbatim in the GR1 report. This repository does
