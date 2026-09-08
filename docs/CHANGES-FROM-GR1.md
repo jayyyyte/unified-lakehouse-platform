@@ -2,7 +2,7 @@
 
 **A complete record of how the implementation differs from `GR1_report.md`, and why.**
 
-Last updated: 2026-08-28 · Covers milestones M0–M1 (M1 complete)
+Last updated: 2026-09-08 · Covers milestones M0–M2 (M2 complete)
 
 > **Source verified.** Every claim here was checked against **`GR1_report.pdf`** (49 pages),
 > not only against the Markdown conversion. Page numbers below refer to the PDF.
@@ -48,6 +48,8 @@ and C — and discovering that is exactly what GR2 is for.
 | A5 | The Nessie image cannot run an HTTP healthcheck (no curl/wget) | Finding | — |
 | A6 | PostgreSQL emits **no before image** under the default replica identity, so §4.2's envelope is unsatisfiable for that source as Appendix A stands | Finding | [0004](adr/0004-connector-native-masking.md) |
 | A7 | Debezium **silently truncates the mask hash to the source column's width** — a narrow column yields a partial digest | Finding | [0004](adr/0004-connector-native-masking.md) |
+| A8 | **Restart safety is at-least-once with a replay window**, not exactly-once — Connect flushes offsets on a timer, which Table 4.3's one-line summary does not say | Finding | — |
+| A9 | **§4.4's WAL-bloat guard was inert** — the heartbeat wrote to a table outside the publication, so `pgoutput` never decoded it and `confirmed_flush_lsn` never moved | Finding | — |
 | B1 | Apache Ranger → Open Policy Agent | Substitution | [0001](adr/0001-opa-instead-of-ranger.md) |
 | B2 | DataHub → OpenLineage + Marquez | Substitution | [0002](adr/0002-marquez-instead-of-datahub.md) |
 | B3 | Spark (Silver/Gold) + Great Expectations → dbt-trino | Substitution | [0003](adr/0003-dbt-trino-for-silver-gold.md) |
@@ -414,6 +416,170 @@ NOTE: buyer_phone is narrower than a SHA-256 digest, so the mask is truncated
 bits is not a practical weakness, and the finding is more useful to the report than the fix
 would be. Widening a masked column to 64 characters is the remedy where full-digest strength
 is required.
+
+---
+
+## A8. "Restart safety" is at-least-once with a replay window, not exactly-once
+
+**Measured in M2.** The correction is one of degree rather than of kind — but the degree is
+exactly what a downstream layer has to be built for.
+
+### What GR1 says
+
+> **Table 4.3** — Restart safety: *"Offset stored in the Kafka Connect offsets topic"*
+> (MySQL) / *"LSN stored in the replication slot"* (PostgreSQL).
+
+> **Table 4.1** — Debezium is chosen partly for *"restart safety achieved through Kafka-stored
+> source offsets"*.
+
+Both true. Neither says **when** that offset is written.
+
+### What actually happens
+
+It is written on a **timer**:
+
+```
+offset.flush.interval.ms = 60000        # read from the live worker; the Connect default
+```
+
+Not per record, and not on crash — a SIGKILL has no opportunity to flush anything. So the
+offset in `_connect_offsets` trails the last produced record by up to a minute, and on restart
+Debezium resumes from that stale position and **re-reads everything committed since**.
+
+### Evidence
+
+`python mosaic.py restart-safety --rate 25 --warmup 20 --stall 45 --drain 20`, with the worker
+stopped by **SIGKILL** — not `docker stop`, which flushes offsets on the way out and therefore
+proves materially less:
+
+| Captured table | id range written during the outage | rows | missing | duplicates |
+|---|---|---|---|---|
+| `ecommerce_tx.orders` | 27000..28054 | 1,055 | **0** | 36 |
+| `ecommerce_tx.order_items` | 52728..54617 | 1,890 | **0** | 48 |
+| `ecommerce_tx.payments` | 23612..24282 | 671 | **0** | 20 |
+| `public.users` | 5614..5708 | 95 | **0** | 6 |
+
+Committed offsets did resume and advance: `mysql-bin.000007:1238339 → :2399951`
+(GTID `…:1-61738 → …:1-63546`, 1,808 transactions) and PostgreSQL `lsn 70936688 → 72250344`.
+Fully caught up **30.3 s** after restart, with writes continuing 28.4 s into the recovery.
+
+**Rows lost: zero. Duplicate events: 110.** That is the mechanism working exactly as designed,
+and a harness that scored duplicates as failure would report a false negative on it.
+
+### What it changes
+
+Nothing in the architecture. It sharpens one claim and creates one obligation.
+
+1. **The claim.** "No data loss on connector restart" is correct; "exactly-once" would not be.
+   The replay window is bounded by `offset.flush.interval.ms`, **not by the length of the
+   outage** — a 5-second crash and a 5-minute crash replay the same ~60 s of work. Lowering the
+   interval shrinks the window at the cost of more frequent offset commits.
+2. **The obligation.** GR1 §4.2 already says Bronze should *"deduplicate using the source offset
+   as an idempotency key."* A8 turns that from a design nicety into a measured requirement:
+   **~110 duplicate events per crash is what Bronze will actually receive.** M3 must implement
+   it, and the key is the source coordinates — `(file, pos, row)` for MySQL, `(lsn, txId)` for
+   PostgreSQL — not the business primary key.
+
+### Status
+
+**Verified.** Reproducible on demand with `python mosaic.py restart-safety`; every run appends
+to `experiments/results/restart_events.jsonl`.
+
+---
+
+## A9. §4.4's WAL-accumulation guard was inert as configured
+
+**The strongest finding of M2**, and structurally the same failure as A6: a mitigation GR1
+names in prose, configured in good faith, silently doing nothing.
+
+### What GR1 says
+
+§4.4 identifies the PostgreSQL-specific operational risk correctly — it is the one place where
+the two CDC mechanisms differ in kind rather than in detail:
+
+> *"because a logical replication slot prevents PostgreSQL from removing WAL segments until
+> Debezium has processed them, a prolonged Debezium outage causes WAL to accumulate on disk and
+> can eventually exhaust available storage. This risk is mitigated … by emitting periodic
+> heartbeat events that advance the confirmed-flush position even when the monitored tables
+> receive no application writes."*
+
+That is right, and the implementation configured exactly it:
+
+```json
+"heartbeat.interval.ms": "10000",
+"heartbeat.action.query": "INSERT INTO public.cdc_heartbeat(ts) VALUES (now())"
+```
+
+### Why it did not work
+
+`mosaic_pub` published four tables — `users`, `products`, `categories`, `inventory` — and
+**not `cdc_heartbeat`**. `pgoutput` decodes only *published* tables. So the heartbeat's
+`INSERT` wrote WAL that Debezium never received as a change event, gained no new LSN to
+confirm, and `confirmed_flush_lsn` did not move.
+
+Every visible signal said the heartbeat was healthy, and it was: 503 rows in `cdc_heartbeat`,
+503 messages on `__debezium-heartbeat.mosaic.postgres`. **The guard was firing and achieving
+nothing** — no error, no warning, no log line.
+
+### Evidence
+
+`python mosaic.py wal-guard --idle 130`, captured tables idle, connector **healthy** throughout:
+
+| Sample | `confirmed_flush_lsn` | `current_wal_lsn` | retained WAL |
+|---|---|---|---|
+| start | `0/40D3EA8` | `0/4175C28` | 2,216,816 |
+| +130 s | `0/40D3EA8` *(frozen)* | `0/4176308` *(advancing)* | 2,218,576 |
+
+WAL advancing while the confirmed-flush position does not **is** the unbounded-retention
+condition §4.4 describes. The guard meant to prevent it was the thing that was broken.
+
+### The fix
+
+One table, in two places — the publication and the connector's capture list:
+
+```sql
+ALTER PUBLICATION mosaic_pub ADD TABLE cdc_heartbeat;   -- and in domains/ecommerce/ddl/postgres.sql
+```
+```json
+"table.include.list": "public.users,public.products,public.categories,public.inventory,public.cdc_heartbeat"
+```
+
+Re-measured over the same 130 s idle window:
+
+| idle, connector alive | `confirmed_flush_lsn` advance |
+|---|---|
+| heartbeat table outside the publication | **0 bytes** |
+| heartbeat table published | **688,776 bytes** |
+
+Retained WAL fell from 704,880 to **4,544 bytes**. `cdc-verify` then showed the heartbeat
+flowing through CDC as an ordinary captured table (67 `op=c` events on its own topic), so the
+fix is visible end-to-end and not only in the slot statistics.
+
+### One honest limit, worth stating in the report
+
+The heartbeat's `INSERT` is issued **by the connector**. Killing the worker therefore stops the
+only writer, the database goes genuinely idle, and no WAL accumulates. The guard protects *an
+idle capture set beside a busy database* — the case measured above. **It cannot protect anything
+while the consumer itself is down**, which is the scenario §4.4's phrase *"a prolonged Debezium
+outage"* most naturally suggests. There, the real bounds are `wal_keep_size` and disk.
+
+### Impact on GR1's claims
+
+§4.4's analysis of the risk survives intact and is one of the report's better passages. What
+does not survive is the implicit assumption that configuring `heartbeat.action.query` is
+sufficient: **the heartbeat only guards WAL if the connector can see its own writes.** Add that
+sentence to §4.4.
+
+Pair this with A6 when writing GR2. Both are PostgreSQL-side mitigations that GR1 states
+correctly at the level of intent and that fail silently at the level of configuration; neither
+is discoverable by reading, only by measuring. Two independent instances make it a pattern
+rather than an anecdote — and that pattern is a defensible answer to *"what did the
+implementation phase actually contribute?"*
+
+### Status
+
+**Verified, with a before/after pair.** Both runs are kept in
+`experiments/results/restart_events.jsonl`. The failing one is the evidence.
 
 ---
 

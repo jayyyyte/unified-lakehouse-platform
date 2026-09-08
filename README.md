@@ -2,7 +2,6 @@
 
 A self-hosted unified lakehouse platform for multi-source CDC and hybrid top-*k* analytics.
 
-Graduation project, Hanoi University of Science and Technology — implementation phase (GR2).
 The design phase deliverable is [`docs/GR1_report.md`](docs/GR1_report.md); this repository is
 the system that report specifies, plus the components that carry its novelty.
 
