@@ -74,7 +74,7 @@ DOMAIN_WORDS = [
 ]
 
 
-# --------------------------------------------------------------------- helpers
+# ------ helpers
 @functools.lru_cache(maxsize=1)
 def docker_bin() -> str:
     """Absolute path to the docker executable.
@@ -171,7 +171,7 @@ def http(url: str, method: str = "GET", body: dict | None = None, timeout: int =
         return r.status, (json.loads(raw) if raw.strip() else None)
 
 
-# ------------------------------------------------------------------- lifecycle
+# ---------- lifecycle
 def cmd_up(args) -> int:
     rc = compose("up", "-d", profiles=args.profile)
     if rc != 0:
@@ -310,7 +310,7 @@ def cmd_logs(args) -> int:
     return compose("logs", "-f", "--tail", "100", *(args.service or []))
 
 
-# ------------------------------------------------------------------ connectors
+# --------- connectors
 def cmd_connectors(args) -> int:
     """Register (or update) every Debezium connector for a domain."""
     conn_dir = ROOT / "domains" / args.domain / "connectors"
@@ -356,7 +356,7 @@ def cmd_connectors(args) -> int:
     return 0
 
 
-# ------------------------------------------------------------- abstraction gate
+# ---------- abstraction gate
 def cmd_check_abstraction(args) -> int:
     """L3 gate: no domain vocabulary may appear anywhere under platform/.
 
@@ -395,7 +395,7 @@ def cmd_check_abstraction(args) -> int:
     return 0
 
 
-# ---------------------------------------------------------------------- doctor
+# --------- doctor
 def _exec(container: str, *cmd: str) -> str | None:
     """Run a command in a container; None if it fails or the container is absent."""
     r = subprocess.run([docker_bin(), "exec", container, *cmd],
@@ -506,7 +506,7 @@ def _render(checks) -> int:
     return 1 if failed else 0
 
 
-# ------------------------------------------------------------------ port check
+# --------------- port check
 def cmd_check_ports(args) -> int:
     """Report which of the stack's host ports are already taken, and by what.
 
@@ -554,7 +554,7 @@ def cmd_check_ports(args) -> int:
     return 0
 
 
-# ----------------------------------------------------------------- seed data
+# ------------- seed data
 def cmd_generate(args) -> int:
     """Generate the CSV corpus for a domain (no database needed)."""
     cmd = [sys.executable, "-m", f"tools.seed.generate",
@@ -564,7 +564,7 @@ def cmd_generate(args) -> int:
     return run(cmd, cwd=str(ROOT))
 
 
-# ------------------------------------------------------------ live workload
+# ------------ live workload
 def _tool(module: str, *args: str) -> int:
     return run([sys.executable, "-m", module, *args], cwd=str(ROOT))
 
@@ -605,6 +605,20 @@ def cmd_cdc_verify(args) -> int:
     if args.require_update:
         argv.append("--require-update")
     return _tool("tools.cdc.verify", *argv)
+
+
+def cmd_restart_safety(args) -> int:
+    """Kill Connect mid-stream under load and prove the resume lost nothing (M2)."""
+    return _tool("tools.cdc.restart", "restart", "--domain", args.domain,
+                 "--mode", args.mode, "--rate", str(args.rate),
+                 "--warmup", str(args.warmup), "--stall", str(args.stall),
+                 "--drain", str(args.drain))
+
+
+def cmd_wal_guard(args) -> int:
+    """Exercise GR1 section 4.4's WAL-accumulation guard on the replication slot."""
+    return _tool("tools.cdc.restart", "wal-guard", "--domain", args.domain,
+                 "--mode", args.mode, "--idle", str(args.idle))
 
 
 # ------------------------------------------------------------------- shells
@@ -691,6 +705,25 @@ def main() -> int:
     cv.add_argument("--require-update", action="store_true",
                     help="fail unless an UPDATE before image was inspected")
     cv.set_defaults(func=cmd_cdc_verify)
+
+    rsf = sub.add_parser("restart-safety",
+                         help="kill Connect mid-stream under load, prove no gap (M2)")
+    rsf.add_argument("--domain", default="ecommerce")
+    rsf.add_argument("--mode", default="kill", choices=["kill", "stop", "pause"],
+                     help="kill = SIGKILL (the honest crash); stop = graceful SIGTERM")
+    rsf.add_argument("--rate", type=float, default=25.0)
+    rsf.add_argument("--warmup", type=float, default=20.0)
+    rsf.add_argument("--stall", type=float, default=45.0)
+    rsf.add_argument("--drain", type=float, default=20.0)
+    rsf.set_defaults(func=cmd_restart_safety)
+
+    wg = sub.add_parser("wal-guard",
+                        help="heartbeat / WAL-accumulation guard on the replication slot")
+    wg.add_argument("--domain", default="ecommerce")
+    wg.add_argument("--mode", default="kill", choices=["kill", "stop", "pause"])
+    wg.add_argument("--idle", type=float, default=150.0,
+                    help="idle seconds per phase; must exceed the 60s offset flush interval")
+    wg.set_defaults(func=cmd_wal_guard)
 
     sub.add_parser("sql", help="Trino CLI").set_defaults(func=cmd_sql)
     ps = sub.add_parser("psql", help="PostgreSQL shell")
