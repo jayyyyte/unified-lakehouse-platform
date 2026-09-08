@@ -64,6 +64,15 @@ CREATE INDEX IF NOT EXISTS idx_prod_emb_hnsw
     WITH (m = 16, ef_construction = 64);
 
 -- ---- CDC heartbeat sink (advances confirmed_flush_lsn; guards WAL bloat) ----
+-- This table MUST be part of mosaic_pub below, and it was not until M2 measured the
+-- guard and found it inert. The connector's heartbeat.action.query INSERTs here every
+-- 10 s, which writes WAL -- but pgoutput only decodes changes to *published* tables, so
+-- while this table sat outside the publication Debezium never received a change event
+-- for it, never gained a new LSN to confirm, and confirmed_flush_lsn did not move.
+-- Measured over 130 s of idle with the connector healthy: current_wal_lsn advanced
+-- 0/4175C28 -> 0/4176308 while confirmed_flush_lsn stayed at 0/40D3EA8. That is the
+-- exact unbounded-retention condition GR1 section 4.4 says this heartbeat prevents.
+-- The heartbeat only guards WAL if the connector can *see* its writes.
 CREATE TABLE IF NOT EXISTS cdc_heartbeat (ts TIMESTAMPTZ NOT NULL);
 
 -- ---- before images (REPLICA IDENTITY) ----
@@ -85,4 +94,5 @@ ALTER TABLE inventory REPLICA IDENTITY FULL;
 -- Debezium requires REPLICATION and a publication for pgoutput.
 ALTER USER cdc WITH REPLICATION;
 DROP PUBLICATION IF EXISTS mosaic_pub;
-CREATE PUBLICATION mosaic_pub FOR TABLE users, products, categories, inventory;
+CREATE PUBLICATION mosaic_pub
+    FOR TABLE users, products, categories, inventory, cdc_heartbeat;
