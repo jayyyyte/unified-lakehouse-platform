@@ -1,0 +1,15 @@
+version: 2
+
+sources:
+  - name: bronze
+    description: >
+      Every captured Debezium topic, envelope intact and deduplicated on the source
+      position (pipelines/bronze/bronze_stream.py). The only input to Silver.
+    database: iceberg
+    schema: bronze
+    tables:
+      - name: cdc_events
+        loaded_at_field: _ingest_ts
+        freshness:
+          warn_after: {count: 5, period: minute}
+          error_after: {count: 30, period: minute}

@@ -1,0 +1,8 @@
+# Rebuilt by assemble.py on every run -- generated from domains/, never edited here.
+models/silver/_generated/
+models/gold/_domains/
+tests/_domains/
+# dbt run artefacts
+target/
+logs/
+dbt_packages/

@@ -1,0 +1,41 @@
+# MOSAIC Silver and Gold on Iceberg, through Trino (ADR 0003).
+#
+# This project names no domain. Silver models are *generated* by assemble.py, one per
+# captured table, from domains/*/connectors/*.json and the live source catalog; Gold
+# models are copied in from domains/*/gold/. Both land in gitignored directories, so
+# what is checked in here is only the domain-free machinery: the CDC current-state
+# macro, the Bronze source, and the schema-naming rule. Adding a domain touches only
+# domains/ -- the L3 claim, kept literally true for the transform layer too.
+name: mosaic
+version: "1.0.0"
+config-version: 2
+profile: mosaic
+
+model-paths: ["models"]
+macro-paths: ["macros"]
+test-paths: ["tests"]
+target-path: target
+clean-targets: [target, dbt_packages, logs]
+
+vars:
+  # Zone the sources write wall-clock datetimes in -- see docker/compose.yaml (dbt).
+  source_time_zone: "{{ env_var('MOSAIC_SOURCE_TZ', 'UTC') }}"
+
+models:
+  mosaic:
+    # Temp relations as tables: views in a Nessie-catalogued Iceberg schema are not
+    # something this stack has proven, and nothing here needs them.
+    +views_enabled: false
+    silver:
+      +schema: silver
+      +materialized: incremental
+      +incremental_strategy: merge
+      +on_schema_change: append_new_columns
+    gold:
+      +schema: gold
+      # CREATE OR REPLACE keeps the Iceberg table -- and its snapshot history, which
+      # N1 reads -- instead of dropping and recreating it on every full build.
+      +on_table_exists: replace
+      # GR1 section 4.5: refresh statistics after every write, attached to the write
+      # that makes them stale rather than to a timer (ADR 0003).
+      +post-hook: "ANALYZE {{ this }}"

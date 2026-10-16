@@ -1,0 +1,13 @@
+mosaic:
+  target: lakehouse
+  outputs:
+    lakehouse:
+      type: trino
+      method: none
+      user: dbt
+      host: "{{ env_var('MOSAIC_TRINO_HOST', 'trino') }}"
+      port: "{{ env_var('MOSAIC_TRINO_PORT', '8080') | as_number }}"
+      http_scheme: http
+      database: iceberg
+      schema: silver
+      threads: 4
