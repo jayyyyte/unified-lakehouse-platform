@@ -36,6 +36,10 @@ import random
 from dataclasses import dataclass, field
 
 from tools.dbsession import MySqlSession, PostgresSession
+# The seed corpus's region vocabulary, not a second one. Until M3 this file had its own
+# list (north/central/south/...), so every order and user the generator wrote carried a
+# region no seeded row uses, and any per-region aggregate silently split in two.
+from tools.seed.vocab import REGIONS
 
 # Weights of the write mix. Order-heavy on purpose: transactional volume is what
 # moves the CDC watermark, and a realistic catalogue changes far more slowly than
@@ -56,7 +60,6 @@ STATUS_NEXT = {
 }
 PAY_METHOD = ["card", "ewallet", "cod", "bank_transfer"]
 PAY_STATUS = ["authorized", "captured", "captured", "captured", "failed"]
-REGIONS = ["north", "central", "south", "highlands", "delta"]
 RESTOCK_THRESHOLD = 25    # a replenishment is triggered by a low level, not by popularity
 RESTOCK_LEAD_SECONDS = 300  # ...and not instantly: see op_restock
 FIRST = ["An", "Binh", "Chi", "Dung", "Giang", "Ha", "Hieu", "Khanh", "Lan",
