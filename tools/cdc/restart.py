@@ -77,6 +77,9 @@ from tools.loadgen.workload import Workload  # noqa: E402
 
 LEDGER = ROOT / "experiments" / "results" / "restart_events.jsonl"
 CONNECT_CONTAINER = "mosaic-connect"
+# Envelope source-block fields that place an event in its source's log: binlog
+# coordinates on MySQL, WAL position on PostgreSQL. A connector fills only its own.
+SOURCE_POSITION = ("file", "pos", "row", "lsn", "txId", "ts_ms")
 
 # How many consecutive flat samples of the topic end-offsets mean "drained". Three at
 # the poll interval below is ~6 s of silence -- long enough not to trip on the gap
@@ -159,6 +162,8 @@ class Captured:
         self.lo: int | None = None      # max key at the moment of the kill
         self.hi: int | None = None      # max key when writing stopped
         self.seen: dict[int, int] = {}  # key -> times it arrived, over the read window
+        self.inserts: dict[int, int] = {}  # key -> op=c events carrying it
+        self.events: dict[str, int] = {}   # source-event identity -> deliveries
         self.messages = 0               # events on this topic since the kill
 
     @property
@@ -559,10 +564,17 @@ def cmd_restart(a: argparse.Namespace) -> int:
         messages = consume_range(cap.topic, topic_at_kill.get(cap.topic, {}),
                                  topic_now.get(cap.topic, {}))
         cap.messages = len(messages)
-        if not cap.key_column:
-            continue
         for msg in messages:
             env = msg.get("payload", msg)
+            # A replay re-delivers the same source event: same op, same position in
+            # the source log, same images. Only the envelope's top-level ts_ms (when
+            # Debezium processed it) differs, so it is left out of the identity.
+            src = env.get("source") or {}
+            ident = json.dumps([env.get("op"), env.get("before"), env.get("after"),
+                                [src.get(k) for k in SOURCE_POSITION]], sort_keys=True)
+            cap.events[ident] = cap.events.get(ident, 0) + 1
+            if not cap.key_column:
+                continue
             after = env.get("after") or {}
             value = after.get(cap.key_column)
             if value is None:
@@ -572,6 +584,8 @@ def cmd_restart(a: argparse.Namespace) -> int:
             except (TypeError, ValueError):
                 continue
             cap.seen[key] = cap.seen.get(key, 0) + 1
+            if env.get("op") == "c":
+                cap.inserts[key] = cap.inserts.get(key, 0) + 1
 
     return _report(a, captured, names, {
         "mode": a.mode,
@@ -594,32 +608,50 @@ def _report(a, captured: list[Captured], names: list[str], run: dict) -> int:
     duplicates = 0
     proved = 0
     rows = []
+    ranges = {}
 
+    # `dup` counts true replays: the same source event delivered more than once.
+    # It used to be "events per key beyond the first", which also counted a row that
+    # was legitimately inserted and then updated -- an order advancing pending -> paid
+    # is two source events, not one event twice.
     for cap in captured:
+        dup = sum(v - 1 for v in cap.events.values() if v > 1)
+        duplicates += dup
         if not cap.key_column or cap.lo is None or cap.hi is None:
-            rows.append((cap.table, "-", "-", getattr(cap, "messages", 0), "-", "-",
+            rows.append((cap.table, "-", "-", cap.messages, "-", str(dup),
                          "no generated key" if not cap.key_column else "no bracket"))
             continue
         if cap.hi <= cap.lo:
-            rows.append((cap.table, f"{cap.lo}", "0", getattr(cap, "messages", 0), "-", "-",
+            rows.append((cap.table, f"{cap.lo}", "0", cap.messages, "-", str(dup),
                          "no inserts in window"))
             continue
         expected = set(range(cap.lo + 1, cap.hi + 1))
         arrived = {k for k in cap.seen if cap.lo < k <= cap.hi}
         missing = expected - arrived
-        dup = sum(v - 1 for k, v in cap.seen.items() if v > 1)
         gaps += len(missing)
-        duplicates += dup
         proved += 1
+        replayed_inserts = sum(v - 1 for k, v in cap.inserts.items()
+                               if cap.lo < k <= cap.hi and v > 1)
+        ranges[cap.table] = {"topic": cap.topic, "key_column": cap.key_column,
+                             "lo": cap.lo, "hi": cap.hi, "events": cap.messages,
+                             "replayed": dup, "replayed_inserts": replayed_inserts,
+                             "missing": len(missing),
+                             # the pre-M3 metric, kept so the overcount is measurable
+                             "repeats_per_key": sum(v - 1 for v in cap.seen.values()
+                                                    if v > 1)}
         note = "ok" if not missing else f"GAP: {sorted(missing)[:5]}"
         rows.append((cap.table, f"{cap.lo + 1}..{cap.hi}", str(len(expected)),
-                     getattr(cap, "messages", 0), str(len(missing)), str(dup), note))
+                     cap.messages, str(len(missing)), str(dup), note))
 
     print(f"  {'table'.ljust(width)}  {'key range written':>20}  {'rows':>6}  "
           f"{'events':>7}  {'missing':>7}  {'dup':>5}  note")
     for table, rng, nrows, events, missing, dup, note in rows:
         print(f"  {table.ljust(width)}  {rng:>20}  {nrows:>6}  {events:>7}  "
               f"{missing:>7}  {dup:>5}  {note}")
+    print("  (dup = the same source event delivered more than once, matched on op,"
+          " source position and images)")
+    legacy = sum(r["repeats_per_key"] for r in ranges.values())
+    print(f"  pre-M3 metric (events per key beyond the first, updates included): {legacy}")
 
     slots = run["slots_after"]
     series = run["slot_series"]
@@ -673,6 +705,7 @@ def _report(a, captured: list[Captured], names: list[str], run: dict) -> int:
     _append_ledger({"kind": "restart-safety", "domain": a.domain, "verdict":
                     "pass" if verdict else ("fail" if gaps else "inconclusive"),
                     "gaps": gaps, "duplicates": duplicates, "tables_proved": proved,
+                    "duplicate_metric": "identical source event", "ranges": ranges,
                     **{k: v for k, v in run.items() if k != "slot_series"},
                     "slot_series": series})
     print(f"\n  recorded to {LEDGER.relative_to(ROOT).as_posix()}")
