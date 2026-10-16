@@ -1,41 +1,54 @@
 # ADR 0001 — Open Policy Agent in place of Apache Ranger
 
+*(Dùng Open Policy Agent thay cho Apache Ranger)*
+
 **Status:** Accepted · **Date:** 2026-08-24 · **Relates to:** GR1 §4.6, Table 4.5, Table 4.6
 
-## Context
+> *ADR (Architecture Decision Record) = tài liệu ngắn ghi lại một quyết định kiến trúc: bối cảnh, quyết
+> định, hệ quả.*
 
-GR1 Appendix B specifies Apache Ranger as the authorization engine, enforcing the five-role
-hierarchy of Table 4.6 and the query-time column masking of Table 4.5 (masking Layer 2).
+## Context (bối cảnh)
 
-A working Ranger deployment needs the Ranger Admin service, a backing relational database, Solr
-for audit indexing, and the Trino plugin wired into the coordinator. On the single-node
-Docker Compose target of Appendix B, that competes for memory with Kafka, Spark, Trino, MinIO
-and two databases, and historically costs multiple weeks of integration before the first policy
-evaluates.
+GR1 Appendix B chọn **Apache Ranger** làm engine phân quyền (*authorization*), có hai nhiệm vụ:
+- cưỡng chế **phân cấp năm role** ở Table 4.6;
+- **column masking lúc query** ở Table 4.5 (masking Layer 2: che cột tuỳ theo role của người đang
+  query).
 
-## Decision
+Một Ranger chạy được cần **bốn thành phần**: service Ranger Admin, một database quan hệ phía sau, Solr
+để index audit log, và plugin Trino gắn vào coordinator. Trên target **Docker Compose một máy** của
+Appendix B, chừng đó tranh bộ nhớ với Kafka, Spark, Trino, MinIO và hai database. Theo kinh nghiệm
+chung, tích hợp Ranger thường tốn **nhiều tuần** trước khi policy đầu tiên được đánh giá.
 
-Enforce authorization with **Open Policy Agent** behind Trino's `opa` access-control provider.
+## Decision (quyết định)
 
-The policy model is unchanged. Table 4.6's five roles — `data_admin`, `data_engineer`,
-`data_analyst`, `ml_engineer`, `bi_user` — are expressed verbatim as Rego, and column masking
-remains query-time and role-dependent exactly as Table 4.5 describes.
+Cưỡng chế phân quyền bằng **Open Policy Agent (OPA)**, đứng sau access-control provider `opa` có sẵn
+của Trino. Khi Trino nhận một query, nó hỏi OPA "user này có được làm việc này không", và OPA trả lời
+dựa trên policy.
 
-## Consequences
+**Mô hình policy không đổi.** Năm role của Table 4.6 (`data_admin`, `data_engineer`, `data_analyst`,
+`ml_engineer`, `bi_user`) được viết **nguyên văn** bằng **Rego**, ngôn ngữ policy của OPA. Column
+masking vẫn chạy lúc query và phụ thuộc role, đúng như Table 4.5 mô tả.
 
-**Kept.** Every guarantee GR1 claims: centralised policy, role-based access at catalog / schema
-/ table / column level, query-time column masking, and an audit trail of decisions.
+## Consequences (hệ quả)
 
-**Gained.** Policy becomes a plain-text, version-controlled, unit-testable artifact — `opa test`
-runs the role hierarchy as a test suite in CI. That is materially better evidence for a defense
-than screenshots of an admin UI. One container instead of four.
+**Giữ được.** Mọi cam kết GR1 đưa ra: policy tập trung; kiểm soát truy cập theo role ở mức catalog /
+schema / table / column; column masking lúc query; và audit trail cho các quyết định.
 
-**Lost.** Ranger's web UI for policy authoring, and its tag-sync integration with a catalog.
-The first is not a project requirement. The second matters for N3 (tag propagation), so the tag
-model is owned by `platform/governance/` and handed to OPA as policy data — which is the reason
-N3 is a contribution rather than a configuration exercise.
+**Được thêm.** Policy trở thành một artifact **văn bản thuần, quản lý bằng git, unit test được**. Lệnh
+`opa test` chạy phân cấp role như một test suite trong CI. Khi bảo vệ, đó là bằng chứng tốt hơn hẳn ảnh
+chụp màn hình một giao diện admin. Và chỉ cần **một container thay vì bốn**.
 
-**Framing.** This is a *substitution, not an omission*. Ranger remains the correct choice at
-production scale with a dedicated platform team, and the report should say so. An examiner
-comparing this repository against GR1 Appendix B will notice the difference; the honest answer
-is on paper before they ask.
+**Mất.**
+- Giao diện web để soạn policy của Ranger: không phải yêu cầu của dự án.
+- Tích hợp **tag-sync** của Ranger với catalog (tự đồng bộ tag từ catalog sang policy). Cái này quan
+  trọng với N3 (lan truyền tag). Vì vậy mô hình tag được giao cho `platform/governance/` sở hữu, rồi
+  truyền sang OPA dưới dạng **policy data**. Đó cũng là lý do N3 là một **đóng góp** chứ không phải một
+  bài tập cấu hình.
+
+**Cách trình bày (Framing).** Đây là một **thay thế, không phải bỏ sót** (*substitution, not
+omission*). Ranger vẫn là lựa chọn đúng ở quy mô production với một đội platform riêng, và báo cáo nên
+nói vậy. Giám khảo so repo này với GR1 Appendix B sẽ nhận ra khác biệt; câu trả lời trung thực đã nằm
+sẵn trên giấy trước khi họ hỏi.
+
+> **Trạng thái implement (2026-10-16):** profile `gov` (chứa `opa`) **chưa từng được bật**. Đây là
+> quyết định đã chốt, chưa phải thứ đã chạy. Xem STATUS.md.

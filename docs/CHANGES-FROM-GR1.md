@@ -1,116 +1,126 @@
-# Changes from the GR1 Report
+# Changes from the GR1 Report (Những thay đổi so với báo cáo GR1)
 
-**A complete record of how the implementation differs from `GR1_report.md`, and why.**
+**Bản ghi đầy đủ về việc bản implement khác `GR1_report.md` ở đâu, và tại sao.**
 
-Last updated: 2026-10-05 · Covers milestones M0–M3 (M3 complete)
+Last updated: 2026-10-16 · Covers milestones M0–M3 (M3 complete)
 
-> **Source verified.** Every claim here was checked against **`GR1_report.pdf`** (49 pages),
-> not only against the Markdown conversion. Page numbers below refer to the PDF.
-> The conversion `GR1_report.md` was independently confirmed faithful — 98% text-length
-> match, and each quoted configuration matches the PDF byte for byte. See
-> *Appendix: on the two copies of the report* at the end.
+> *Bản song ngữ: diễn giải tiếng Việt, giữ thuật ngữ tiếng Anh và giữ nguyên trích dẫn gốc từ GR1
+> (để dẫn lại khi viết báo cáo). Thuật ngữ khó tra ở
+> [PROBLEM.md, Phụ lục C](PROBLEM.md#phụ-lục-c--bảng-thuật-ngữ-glossary).*
+
+> **Đã đối chiếu nguồn.** Mọi khẳng định ở đây đã được kiểm với **`GR1_report.pdf`** (49 trang),
+> không chỉ với bản chuyển đổi Markdown. Số trang bên dưới là số trang PDF. Bản `GR1_report.md` đã
+> được xác nhận độc lập là trung thực (khớp 98% độ dài văn bản, mọi đoạn cấu hình được trích khớp PDF
+> từng byte). Xem *Phụ lục: về hai bản sao của báo cáo* ở cuối.
 
 ---
 
-## How to read this document
+## How to read this document (cách đọc)
 
-GR1 was a **design study**. This repository is the **implementation** of that design.
-Whenever an implementation meets reality, three kinds of difference appear, and this
-document keeps them strictly separate because they mean very different things in a defence:
+GR1 là một **nghiên cứu thiết kế**; repo này là **bản implement** của thiết kế đó. Mỗi khi bản
+implement gặp thực tế, sẽ xuất hiện các loại khác biệt. Tài liệu này tách chúng ra rõ ràng, vì khi
+bảo vệ, mỗi loại mang ý nghĩa rất khác nhau:
 
-| Part | Kind of change | What it means |
+| Phần | Loại thay đổi | Ý nghĩa |
 |---|---|---|
-| **A** | **Findings** — GR1 says something that *cannot be executed as written* | Not a mistake you should hide. This is the **product** of an implementation phase, and it is the most valuable material in this document. |
-| **B** | **Substitutions** — a component replaced by a lighter equivalent | A deliberate engineering trade. The *guarantee* is unchanged; the tool differs. |
-| **C** | **Additions** — things GR1 does not contain at all | Where the novelty lives. GR1 proposed; this builds. |
-| **D** | **Operational changes** — structure, tooling, conventions | Mechanical. No effect on the architecture's claims. |
-| **E** | **Unchanged** — what GR1 specified and we kept exactly | Bounds the delta so a reader knows the design largely survived. |
-| **F** | **Defects inside GR1 itself** — broken references, contradictions | Fix these in the report before submitting GR2. |
+| **A** | **Findings**: GR1 nói một điều *không thể thực thi như đã viết* | Không phải lỗi cần giấu. Đây là **sản phẩm** của giai đoạn implement, và là phần giá trị nhất của tài liệu. |
+| **B** | **Substitutions**: thay một thành phần bằng thứ tương đương nhẹ hơn | Đánh đổi kỹ thuật có chủ đích. **Cam kết (guarantee) giữ nguyên**, chỉ công cụ khác. |
+| **C** | **Additions**: những thứ GR1 hoàn toàn không có | Nơi chứa tính mới (*novelty*). GR1 đề xuất; ở đây xây. |
+| **D** | **Operational changes**: cấu trúc, công cụ, quy ước | Mang tính cơ học. Không ảnh hưởng tới các claim của kiến trúc. |
+| **E** | **Unchanged**: những gì GR1 đặc tả và được giữ nguyên | Khoanh vùng phần thay đổi, để người đọc thấy thiết kế phần lớn vẫn đứng vững. |
+| **F** | **Defects inside GR1 itself**: tham chiếu hỏng, mâu thuẫn trong văn bản | Sửa trong báo cáo trước khi nộp GR2. |
 
-Every entry follows the same shape: what GR1 says → what we do → why → evidence →
-what it does to GR1's claims. Where a change has an Architecture Decision Record, the ADR
-holds the full argument and is linked.
+Mỗi mục theo cùng một khuôn: **GR1 nói gì → ta làm gì → vì sao → bằng chứng → ảnh hưởng tới các
+claim của GR1.** Nếu thay đổi có ADR thì ADR chứa lập luận đầy đủ và được link tới.
 
-**One sentence to take away:** the architecture of GR1 survived implementation almost
-entirely intact. What did not survive were four specific *configurations* in Appendices B
-and C — and discovering that is exactly what GR2 is for.
+**Một câu để nhớ:** kiến trúc của GR1 qua được giai đoạn implement gần như nguyên vẹn. Thứ *không*
+qua được là một số **cấu hình cụ thể** trong Appendix B và C, và việc phát hiện ra chúng chính là mục
+đích của GR2.
 
 ---
 
-## Summary of every change
+## Summary of every change (tóm tắt mọi thay đổi)
 
-| # | Change | Type | ADR |
+| # | Thay đổi | Loại | ADR |
 |---|---|---|---|
-| A1 | Appendix C's SMT masking chain cannot satisfy §4.2 and §4.6 at the same time | Finding | [0004](adr/0004-connector-native-masking.md) |
-| A2 | Appendix B's Avro converter is not on the Connect image's classpath — worker dies at startup | Finding | [0005](adr/0005-json-converter.md) |
-| A3 | Image tag `debezium/connect:2.7` does not exist | Finding | — |
-| A4 | Image tag `projectnessie/nessie:0.90.4` is not on Docker Hub | Finding | — |
-| A5 | The Nessie image cannot run an HTTP healthcheck (no curl/wget) | Finding | — |
-| A6 | PostgreSQL emits **no before image** under the default replica identity, so §4.2's envelope is unsatisfiable for that source as Appendix A stands | Finding | [0004](adr/0004-connector-native-masking.md) |
-| A7 | Debezium **silently truncates the mask hash to the source column's width** — a narrow column yields a partial digest | Finding | [0004](adr/0004-connector-native-masking.md) |
-| A8 | **Restart safety is at-least-once with a replay window**, not exactly-once — Connect flushes offsets on a timer, which Table 4.3's one-line summary does not say | Finding | — |
-| A9 | **§4.4's WAL-bloat guard was inert** — the heartbeat wrote to a table outside the publication, so `pgoutput` never decoded it and `confirmed_flush_lsn` never moved | Finding | — |
-| A10 | **§4.2's "replay capability" expires with Kafka retention** — twice, Bronze could not be bootstrapped from the topics; after a 10-day stop every table topic was empty | Finding | — |
-| A11 | **MySQL `DATETIME` arrives 7 hours off** — Debezium encodes the zone-less wall clock as if it were UTC; the harmonisation §4.4 gave to a `TimestampConverter` SMT has to happen in Silver | Finding | (see A1) |
-| A12 | **§4.3's `gold.orders` partitioning is too fine for the prototype** — 2,944 partitions of 12.6 rows on average; the build fails Trino's default writer cap; `ANALYZE` 33x and a full scan 14x slower than the same data unpartitioned | Finding | — |
+| A1 | Chuỗi SMT masking ở Appendix C không thể thoả §4.2 và §4.6 cùng lúc | Finding | [0004](adr/0004-connector-native-masking.md) |
+| A2 | Avro converter của Appendix B không có trên classpath của image Connect, nên worker chết khi khởi động | Finding | [0005](adr/0005-json-converter.md) |
+| A3 | Image tag `debezium/connect:2.7` không tồn tại | Finding | — |
+| A4 | Image tag `projectnessie/nessie:0.90.4` không có trên Docker Hub | Finding | — |
+| A5 | Image Nessie không chạy được HTTP healthcheck (không có curl/wget) | Finding | — |
+| A6 | PostgreSQL **không phát before image** với replica identity mặc định, nên với Appendix A như hiện tại thì envelope §4.2 không thể đạt được cho nguồn này | Finding | [0004](adr/0004-connector-native-masking.md) |
+| A7 | Debezium **âm thầm cắt hash mask theo độ rộng cột nguồn**: cột hẹp cho ra digest không đầy đủ | Finding | [0004](adr/0004-connector-native-masking.md) |
+| A8 | **Restart safety là at-least-once kèm cửa sổ replay**, không phải exactly-once. Connect flush offset theo đồng hồ, điều mà tóm tắt một dòng ở Table 4.3 không nói | Finding | — |
+| A9 | **WAL-bloat guard của §4.4 vô hiệu**: heartbeat ghi vào bảng ngoài publication, nên `pgoutput` không giải mã nó và `confirmed_flush_lsn` không bao giờ tiến | Finding | — |
+| A10 | **"Replay capability" của §4.2 hết hạn theo Kafka retention**: hai lần không bootstrap được Bronze từ topic; sau 10 ngày dừng máy thì mọi topic bảng đều rỗng | Finding | — |
+| A11 | **MySQL `DATETIME` đến lệch 7 tiếng**: Debezium mã hoá giờ địa phương không có múi giờ như thể là UTC; việc chuẩn hoá mà §4.4 giao cho SMT `TimestampConverter` phải chuyển sang Silver | Finding | (xem A1) |
+| A12 | **Partitioning `gold.orders` của §4.3 quá mịn cho prototype**: 2,944 phân vùng, trung bình 12.6 dòng; build vượt giới hạn writer mặc định của Trino; `ANALYZE` chậm 33 lần và full scan chậm 14 lần so với cùng dữ liệu không phân vùng | Finding | — |
 | B1 | Apache Ranger → Open Policy Agent | Substitution | [0001](adr/0001-opa-instead-of-ranger.md) |
 | B2 | DataHub → OpenLineage + Marquez | Substitution | [0002](adr/0002-marquez-instead-of-datahub.md) |
 | B3 | Spark (Silver/Gold) + Great Expectations → dbt-trino | Substitution | [0003](adr/0003-dbt-trino-for-silver-gold.md) |
 | B4 | Avro + Confluent Schema Registry → JsonConverter | Substitution | [0005](adr/0005-json-converter.md) |
-| C1 | A stated problem and a four-rung abstraction ladder (`PROBLEM.md`) | Addition | — |
-| C2 | **N1** Freshness Registry — a queryable watermark plane | Addition | — |
-| C3 | **N2** Freshness-aware fusion engine — implements §5.3 | Addition | — |
-| C4 | **N3** Tag governance that reaches the vector index | Addition | — |
-| C5 | **N4** Freshness-SLA query routing (stretch) | Addition | — |
-| C6 | A second domain (`jobmarket`) as mechanical proof of genericity | Addition | — |
-| C7 | `platform/` ÷ `domains/` split, enforced by a CI gate | Addition | — |
-| C8 | `_src_ts` / `_ingest_ts` watermark convention | Addition | — |
-| C9 | Seed generator and load generator as first-class deliverables | Addition | — |
-| D1 | `mosaic.py` task runner (`make` is unavailable) | Operational | — |
-| D2 | `up` waits for *healthy*, not merely *started* | Operational | — |
-| D3 | Compose profiles so the default footprint fits one machine | Operational | — |
-| D4 | All published host ports parameterised | Operational | — |
-| D5 | Platform metadata in its own database + a 4th Trino catalog | Operational | — |
-| D6 | Domain DDL and connectors moved under `domains/<domain>/` | Operational | — |
-| D7 | Explicit `decimal.handling.mode` and `time.precision.mode` | Operational | — |
-| D8 | No `ExtractNewRecordState` at the connector | Operational | (see A1) |
-| D9 | MySQL bulk load runs as `root`, not `cdc` | Operational | — |
-| D10 | `REPLICA IDENTITY FULL` on `users`, `products`, `inventory` | Operational | (see A6) |
-| D11 | Silver is **generated** per captured table; Gold lives in `domains/<domain>/gold/` | Operational | (see C6) |
-| D12 | Silver = one unpartitioned current-state table per captured table, soft deletes | Operational | — |
-| D13 | dbt runs in its own container (`mosaic/dbt:1.8`), behind the `transform` profile | Operational | [0003](adr/0003-dbt-trino-for-silver-gold.md) |
-| D14 | Trino `iceberg.max-partitions-per-writer` raised 100 → 5000 | Operational | (see A12) |
-| D15 | Load generator draws regions from the seed's vocabulary | Operational | — |
+| C1 | Một bài toán được phát biểu rõ và cái thang trừu tượng 4 bậc (`PROBLEM.md`) | Addition | — |
+| C2 | **N1** Freshness Registry: mặt phẳng watermark query được | Addition | — |
+| C3 | **N2** Fusion engine có tính tới độ tươi, implement §5.3 | Addition | — |
+| C4 | **N3** Governance theo tag, đi tới tận vector index | Addition | — |
+| C5 | **N4** Định tuyến query theo freshness SLA (stretch) | Addition | — |
+| C6 | Domain thứ hai (`jobmarket`) làm bằng chứng máy móc cho tính tổng quát | Addition | — |
+| C7 | Tách `platform/` ÷ `domains/`, có cổng CI cưỡng chế | Addition | — |
+| C8 | Quy ước watermark `_src_ts` / `_ingest_ts` | Addition | — |
+| C9 | Seed generator và load generator là deliverable chính thức | Addition | — |
+| D1 | Task runner `mosaic.py` (không có `make`) | Operational | — |
+| D2 | `up` đợi *healthy*, không chỉ *started* | Operational | — |
+| D3 | Compose profiles để footprint mặc định vừa một máy | Operational | — |
+| D4 | Mọi port publish ra host đều tham số hoá | Operational | — |
+| D5 | Metadata của platform nằm ở DB riêng + catalog Trino thứ 4 | Operational | — |
+| D6 | DDL domain và connector chuyển vào `domains/<domain>/` | Operational | — |
+| D7 | Đặt rõ `decimal.handling.mode` và `time.precision.mode` | Operational | — |
+| D8 | Không dùng `ExtractNewRecordState` ở connector | Operational | (xem A1) |
+| D9 | Bulk load MySQL chạy bằng `root`, không bằng `cdc` | Operational | — |
+| D10 | `REPLICA IDENTITY FULL` trên `users`, `products`, `inventory` | Operational | (xem A6) |
+| D11 | Silver được **sinh tự động** cho mỗi bảng capture; Gold nằm ở `domains/<domain>/gold/` | Operational | (xem C6) |
+| D12 | Silver = một bảng trạng thái hiện tại không phân vùng cho mỗi bảng capture, soft delete | Operational | — |
+| D13 | dbt chạy trong container riêng (`mosaic/dbt:1.8`), sau profile `transform` | Operational | [0003](adr/0003-dbt-trino-for-silver-gold.md) |
+| D14 | Nâng `iceberg.max-partitions-per-writer` của Trino từ 100 lên 5000 | Operational | (xem A12) |
+| D15 | Load generator lấy vùng miền từ bộ từ vựng của seed | Operational | — |
 
 ---
 
-# Part A — Findings: GR1 specifications that cannot be executed as written
+# Part A — Findings: những đặc tả GR1 không thể thực thi như đã viết
 
-These are the four (plus one) places where following GR1 literally produces a system that
-does not start or does not do what the report says it does. **Each was found by running the
-thing, not by reading it.** Present these prominently in the GR2 report.
+Đây là những chỗ mà làm đúng từng chữ của GR1 thì ra một hệ thống **không khởi động được**, hoặc
+**không làm điều báo cáo nói**. **Mỗi phát hiện đều tìm ra bằng cách chạy thật, không phải bằng cách
+đọc.** Nên trình bày nổi bật trong báo cáo GR2.
 
 ---
 
 ## A1. The SMT masking chain contradicts the Bronze envelope requirement
 
-**This is the most important finding in this document.** It is a genuine internal
-contradiction in GR1, not a configuration slip.
+*(Chuỗi SMT masking mâu thuẫn với yêu cầu giữ envelope ở Bronze)*
 
-### What GR1 says
+**Đây là phát hiện quan trọng nhất của tài liệu.** Nó là một **mâu thuẫn nội tại** thật sự trong
+GR1, không phải một lỗi cấu hình.
 
-Two requirements, in two different sections:
+### What GR1 says (GR1 nói gì)
+
+Hai yêu cầu, ở hai mục khác nhau:
 
 > **§4.2** — *"The Bronze tier stores the unmodified Debezium change envelope, including
 > the before/after row state, the operation type, the source offset or log sequence number,
 > and the event timestamp, **with no transformation applied**, in order to preserve full
 > auditability and replay capability."*
 
+Tức là: Bronze phải lưu **nguyên vẹn** envelope (before/after, loại thao tác, offset/LSN, timestamp),
+**không biến đổi gì**, để giữ khả năng audit và replay.
+
 > **§4.6 / Table 4.5** — Layer-1 masking applies `MaskField` / `ReplaceField`
 > *"at ingestion, before the Kafka topic"*, so that raw PII *"never persists to any storage
 > tier."*
 
-And Appendix C implements the second with this transform chain:
+Tức là: masking lớp 1 phải chạy **trước khi vào Kafka**, để PII thô **không bao giờ** được lưu ở bất
+kỳ tầng nào.
+
+Appendix C implement yêu cầu thứ hai bằng chuỗi transform này:
 
 ```json
 "transforms": "unwrap,maskPII,dropSensitive,ts",
@@ -119,10 +129,10 @@ And Appendix C implements the second with this transform chain:
 "transforms.maskPII.fields": "buyer_email,buyer_phone"
 ```
 
-### Why it cannot work
+### Why it cannot work (vì sao không thể chạy)
 
-A Debezium change event is **nested**. The business columns do not sit at the top level;
-they live inside `before` and `after`:
+Một change event của Debezium là **lồng nhau**. Các cột nghiệp vụ không nằm ở cấp ngoài cùng mà nằm
+*bên trong* `before` và `after`:
 
 ```json
 {
@@ -133,37 +143,35 @@ they live inside `before` and `after`:
 }
 ```
 
-Kafka Connect's `MaskField$Value` and `ReplaceField$Value` address **top-level fields
-only**. They cannot reach `after.buyer_email`. That is precisely why Appendix C puts
-`unwrap` **first** in the chain — `ExtractNewRecordState` flattens the event down to just
-the `after` image so that `MaskField` has something it can address.
+`MaskField$Value` và `ReplaceField$Value` của Kafka Connect **chỉ chạm được field cấp ngoài cùng**;
+chúng không với tới `after.buyer_email`. Đó chính là lý do Appendix C đặt `unwrap` **đầu tiên**:
+`ExtractNewRecordState` làm phẳng event, chỉ giữ lại ảnh `after`, để `MaskField` có thứ mà nó chạm
+được.
 
-But flattening **discards `before`, `op`, and the envelope structure**. So:
+Nhưng làm phẳng thì **vứt bỏ `before`, `op`, và cả cấu trúc envelope**. Vì vậy:
 
-> Running Appendix C's chain gives you a Bronze tier that **cannot** contain the unmodified
-> envelope §4.2 requires. Satisfying §4.6 as written makes §4.2 impossible.
+> Chạy chuỗi của Appendix C sẽ cho ra một Bronze **không thể** chứa envelope nguyên vẹn mà §4.2 đòi
+> hỏi. Thoả §4.6 như đã viết thì §4.2 trở thành bất khả.
 
-### The second, quieter problem
+### The second, quieter problem (vấn đề thứ hai, khó thấy hơn)
 
-Even setting the contradiction aside, the SMT approach **leaks the PII it exists to stop**.
-`MaskField` runs after `unwrap`, so it only ever sees the `after` image. If the envelope
-were somehow preserved, **the `before` image of every UPDATE would carry the unmasked
-previous value straight into Bronze.** Change a user's email, and the old address is written
-to permanent storage in the clear.
+Kể cả bỏ qua mâu thuẫn trên, cách SMT còn **làm rò rỉ đúng thứ PII nó định chặn**. `MaskField` chạy
+sau `unwrap`, nên nó chỉ thấy ảnh `after`. Giả sử bằng cách nào đó envelope được giữ lại, thì **ảnh
+`before` của mọi UPDATE sẽ mang giá trị cũ chưa mask đi thẳng vào Bronze.** Đổi email của một người
+dùng, và địa chỉ cũ bị ghi vào kho lưu trữ vĩnh viễn ở dạng rõ.
 
-### What we do instead
+### What we do instead (ta làm gì thay thế)
 
-Move masking from Kafka Connect SMTs **into the Debezium connector itself**, and drop
-`unwrap` entirely.
+Chuyển masking từ SMT của Kafka Connect **vào chính connector Debezium**, và bỏ hẳn `unwrap`.
 
-| Concern | Appendix C (SMT) | Here (connector-native) |
+| Việc cần làm | Appendix C (SMT) | Ở đây (connector-native) |
 |---|---|---|
-| Mask a value | `MaskField$Value` | `column.mask.hash.SHA-256.with.salt.<salt>` |
-| Drop a column | `ReplaceField$Value` | `column.exclude.list` |
-| Harmonise timestamps | `TimestampConverter$Value` | `time.precision.mode=connect`, cast in Silver |
-| Flattening | at the connector | in the Bronze→Silver step |
+| Che một giá trị | `MaskField$Value` | `column.mask.hash.SHA-256.with.salt.<salt>` |
+| Loại một cột | `ReplaceField$Value` | `column.exclude.list` |
+| Chuẩn hoá timestamp | `TimestampConverter$Value` | `time.precision.mode=connect`, cast ở Silver |
+| Làm phẳng | ở connector | ở bước Bronze→Silver |
 
-Actual configuration now in [`domains/ecommerce/connectors/mysql-cdc.json`](../domains/ecommerce/connectors/mysql-cdc.json):
+Cấu hình thật đang nằm trong [`domains/ecommerce/connectors/mysql-cdc.json`](../domains/ecommerce/connectors/mysql-cdc.json):
 
 ```json
 "column.mask.hash.SHA-256.with.salt.mosaicPiiSalt":
@@ -171,51 +179,51 @@ Actual configuration now in [`domains/ecommerce/connectors/mysql-cdc.json`](../d
 "column.exclude.list": "ecommerce_tx.payments.raw_card_number"
 ```
 
-### Why this fixes both problems at once
+### Why this fixes both problems at once (vì sao sửa được cả hai)
 
-Connector-native masking runs **before the change envelope is constructed**. The connector
-reads the binlog/WAL, masks the column, and *then* builds the event. Consequences:
+Masking native chạy **trước khi envelope được dựng**: connector đọc binlog/WAL, mask cột, *rồi mới*
+xây event. Hệ quả:
 
-1. **Both `before` and `after` are masked** — the update leak is closed.
-2. **The envelope is fully preserved** — §4.2 is satisfiable.
-3. Masking is still irreversible and still happens before any Kafka topic — §4.6 and
-   Table 4.5's Layer-1 semantics are unchanged.
+1. **Cả `before` lẫn `after` đều được mask**, nên lỗ rò khi UPDATE được bịt.
+2. **Envelope được giữ nguyên vẹn**, nên §4.2 thoả được.
+3. Masking vẫn không đảo ngược được và vẫn chạy trước mọi Kafka topic, nên ngữ nghĩa Layer-1 của §4.6
+   và Table 4.5 không đổi.
 
-### One deliberate improvement
+### One deliberate improvement (một cải tiến có chủ đích)
 
-GR1's `MaskField` with an empty replacement **destroys** the value. We use a **salted
-SHA-256 hash** instead, which is equally irreversible but keeps the column joinable and
-countable — Silver/Gold can still answer *"how many distinct buyers ordered this week"*
-without ever seeing an address.
+`MaskField` với giá trị thay thế rỗng của GR1 **phá huỷ** giá trị. Ở đây dùng **SHA-256 có salt**:
+cũng không đảo ngược được, nhưng giữ cột **join được và đếm được**. Nhờ vậy Silver/Gold vẫn trả lời
+được câu *"tuần này có bao nhiêu người mua khác nhau"* mà không bao giờ thấy địa chỉ email nào.
 
-Fields GR1 says must **never persist at all** — `users.national_id`,
-`payments.raw_card_number` — are **excluded outright** rather than hashed, because a salted
-hash is still persistence.
+Các field mà GR1 nói **không bao giờ được lưu**, là `users.national_id` và
+`payments.raw_card_number`, thì bị **loại hẳn** chứ không băm, vì một hash có salt vẫn là một hình
+thức lưu trữ.
 
-### Impact on GR1's claims
+### Impact on GR1's claims (ảnh hưởng tới claim của GR1)
 
-Table 4.5's two-layer model is **unchanged in substance**; only the mechanism moved. The
-guarantee in the report ("irreversible, never persisted") is now actually true, which it
-was not before.
+Mô hình masking hai lớp của Table 4.5 **giữ nguyên về bản chất**; chỉ cơ chế thay đổi. Cam kết trong
+báo cáo ("irreversible, never persisted") giờ **thực sự đúng**, điều trước đây không đúng.
 
-**Known limitation:** the salt sits in the connector config, which would be unacceptable in
-production. The fix (a Kafka Connect config provider backed by a secret store) is named, not
-implemented. Say so in the report.
+**Giới hạn đã biết:** salt đang nằm trong cấu hình connector, điều không chấp nhận được ở production.
+Cách sửa (một Kafka Connect config provider đọc từ secret store) được nêu tên, chưa implement. Nên
+ghi rõ điều này trong báo cáo.
 
 ### Status
 
-**Written, not yet exercised.** The connector configs are valid JSON but have not been
-registered against a live Debezium 2.7.3. Expect the first run to surface issues here.
-
-Full argument: [ADR 0004](adr/0004-connector-native-masking.md).
+**Verified (2026-08-28).** *(Bản gốc vẫn ghi "Written, not yet exercised", đó là trạng thái trước
+M1 và đã lỗi thời.)* `python mosaic.py cdc-verify` trên dữ liệu thật: 502 before image trên cả hai
+nguồn đều đã mask; cột bị loại vắng mặt trong 637 image. Chi tiết và ví dụ JSON ở
+[ADR 0004, mục Verification](adr/0004-connector-native-masking.md).
 
 ---
 
 ## A2. The Avro converter is not on the Connect image's classpath
 
+*(Avro converter không có trong image Connect)*
+
 ### What GR1 says
 
-Appendix B configures the Connect worker, and Appendix C repeats it per connector:
+Appendix B cấu hình Connect worker như sau, và Appendix C lặp lại cho từng connector:
 
 ```yaml
 KEY_CONVERTER: io.confluent.connect.avro.AvroConverter
@@ -223,9 +231,9 @@ VALUE_CONVERTER: io.confluent.connect.avro.AvroConverter
 CONNECT_VALUE_CONVERTER_SCHEMA_REGISTRY_URL: http://schema-registry:8081
 ```
 
-### What actually happens
+### What actually happens (thực tế)
 
-The worker **dies during startup**, before serving a single request:
+Worker **chết ngay lúc khởi động**, trước khi phục vụ được bất kỳ request nào:
 
 ```
 ERROR  Stopping due to error   [org.apache.kafka.connect.cli.AbstractConnectCli]
@@ -234,49 +242,47 @@ io.confluent.connect.avro.AvroConverter for configuration key.converter:
 Class io.confluent.connect.avro.AvroConverter could not be found.
 ```
 
-The `debezium/connect` image does **not** bundle Confluent's Avro converter — it is
-Confluent-licensed and ships separately. There is no way for Appendix B to have been run as
-written.
+Image `debezium/connect` **không** đóng gói Avro converter của Confluent, vì converter này theo giấy
+phép Confluent và được phát hành riêng. Vậy **không có cách nào Appendix B đã từng được chạy như
+viết**.
 
 ### What we do instead
 
-`org.apache.kafka.connect.json.JsonConverter` with `schemas.enable=false` on key and value.
+Dùng `org.apache.kafka.connect.json.JsonConverter` với `schemas.enable=false` cho cả key và value.
 
-Two alternatives were weighed and rejected:
+Hai phương án khác đã được cân nhắc và loại:
 
-| Option | Why not |
+| Phương án | Vì sao không |
 |---|---|
-| Custom image bundling Confluent's Avro jars | ~8 transitive jars pinned by hand, brittle across versions. Worse: Confluent's wire format prefixes a magic byte + schema id, and open-source Spark's `from_avro` has **no Schema Registry integration** — the Bronze job would need ABRiS or manual deserialisation. |
-| Apicurio converters (`ENABLE_APICURIO_CONVERTERS=true`) | Ships inside the image, so no download problem — but swaps Confluent Schema Registry for **Apicurio Registry**, a service Appendix B does not name, and leaves the same Avro wire-format burden on Spark. |
+| Tự build image kèm jar Avro của Confluent | Khoảng 8 jar phụ thuộc bắc cầu phải pin bằng tay, dễ vỡ khi đổi version. Tệ hơn: wire format của Confluent có một byte "magic" + schema id ở đầu, và `from_avro` của Spark bản OSS **không tích hợp Schema Registry**, nên Bronze job sẽ cần ABRiS hoặc tự giải mã. |
+| Converter Apicurio (`ENABLE_APICURIO_CONVERTERS=true`) | Có sẵn trong image nên không phải tải về, nhưng thay Confluent Schema Registry bằng **Apicurio Registry**, một service Appendix B không hề nêu, và vẫn để nguyên gánh nặng wire format Avro cho Spark. |
 
-### What is kept, and what is lost
+### What is kept, and what is lost (giữ được gì, mất gì)
 
-**Kept.** The Debezium envelope — `op`, `before`, `after`, `source` — is fully preserved.
-`schemas.enable=false` drops Connect's per-message *schema block*, **not** the envelope. §4.2
-is unaffected.
+**Giữ được.** Envelope Debezium (`op`, `before`, `after`, `source`) được giữ nguyên. `schemas.enable=false`
+chỉ bỏ *khối schema* đi kèm mỗi message của Connect, **không** bỏ envelope. §4.2 không bị ảnh hưởng.
 
-**Arguably improved for Bronze.** §4.2 justifies Bronze by auditability and replay.
-Self-describing JSON can be read by any tool with no registry lookup; a binary Avro payload
-whose schema lives in a separate service is a *weaker* audit artifact if that service is
-lost.
+**Có thể nói là tốt hơn cho Bronze.** §4.2 biện minh cho Bronze bằng khả năng audit và replay. JSON
+tự mô tả đọc được bằng bất kỳ công cụ nào mà không cần tra registry. Ngược lại, một payload Avro nhị
+phân có schema nằm ở một service khác là bằng chứng audit *yếu hơn*, vì nếu mất service đó thì không
+đọc được.
 
-**Lost.** Compact binary encoding, and registry-enforced schema compatibility checking. At
-one node and 10M rows, neither is load-bearing.
+**Mất.** Mã hoá nhị phân gọn, và việc registry cưỡng chế tương thích schema. Ở quy mô một node và 10M
+dòng thì cả hai đều không thiết yếu.
 
-**Partially lost — be honest about this one.** With `schemas.enable=false`, an **added or
-dropped column** is still visible as a change in the payload's field set, so GR1 Table 4.4's
-DDL-handling KPI stays measurable for the common case. But a **type change** (say `INT` →
-`BIGINT`) that does not alter the field set is **not** observable. If the DDL experiment
-needs type fidelity, flipping `value.converter.schemas.enable` to `true` restores it, at
-roughly 10× the message size.
+**Mất một phần, cần nói thẳng.** Với `schemas.enable=false`, việc **thêm hoặc bỏ cột** vẫn thấy được
+qua thay đổi tập field trong payload, nên KPI DDL-handling của GR1 Table 4.4 vẫn đo được cho trường
+hợp thông thường. Nhưng **đổi kiểu dữ liệu** (ví dụ `INT` → `BIGINT`) mà không đổi tập field thì
+**không quan sát được**. Nếu thí nghiệm DDL cần độ trung thực về kiểu, bật
+`value.converter.schemas.enable=true` sẽ khôi phục nó, đổi lại message to hơn khoảng 10 lần.
 
-**Schema Registry stays deployed but is off the data path.** It remains in the stack so that
-returning to Avro is a config change, not a redeployment. **Do not describe it as
-load-bearing in the report** — it currently carries no traffic.
+**Schema Registry vẫn được deploy nhưng nằm ngoài đường dữ liệu.** Nó vẫn ở trong stack để quay lại
+Avro chỉ là đổi cấu hình, không phải deploy lại. **Đừng mô tả nó là load-bearing trong báo cáo**, vì
+hiện nó không mang traffic nào.
 
-**Reversibility:** one line in the worker config, two per connector.
+**Đảo ngược được:** một dòng trong config worker, hai dòng mỗi connector.
 
-Full argument: [ADR 0005](adr/0005-json-converter.md).
+Lập luận đầy đủ: [ADR 0005](adr/0005-json-converter.md).
 
 ---
 
@@ -284,17 +290,17 @@ Full argument: [ADR 0005](adr/0005-json-converter.md).
 
 **GR1 Appendix B:** `image: debezium/connect:2.7`
 
-**What happens:**
+**Thực tế:**
 ```
 failed to resolve reference "docker.io/debezium/connect:2.7":
 docker.io/debezium/connect:2.7: not found
 ```
 
-Debezium publishes **patch-level tags only** — `2.7.0.Final`, `2.7.1.Final`, `2.7.2.Final`,
-`2.7.3.Final`. There is no rolling `2.7` tag.
+Debezium **chỉ publish tag ở mức patch**: `2.7.0.Final`, `2.7.1.Final`, `2.7.2.Final`,
+`2.7.3.Final`. Không có tag "cuốn chiếu" `2.7`.
 
-**Fix:** `debezium/connect:2.7.3.Final` — the newest 2.7 patch, so GR1's stated major.minor
-version is honoured exactly.
+**Sửa:** `debezium/connect:2.7.3.Final`, bản patch mới nhất của 2.7, nên version major.minor mà GR1
+nêu được giữ đúng.
 
 ---
 
@@ -302,30 +308,29 @@ version is honoured exactly.
 
 **GR1 Appendix B:** `image: projectnessie/nessie:0.90.4`
 
-**What happens:** the tag does not resolve. Enumerating Docker Hub shows
-`projectnessie/nessie` **stopped receiving updates at 0.76.6** — the project moved its
-container publishing to GitHub Container Registry.
+**Thực tế:** tag không resolve được. Liệt kê Docker Hub thì thấy `projectnessie/nessie` **ngừng cập
+nhật ở 0.76.6**, vì dự án đã chuyển việc publish container sang GitHub Container Registry.
 
-**Fix:** `ghcr.io/projectnessie/nessie:0.90.4`. Verified present by enumerating all 350 tags
-on GHCR. **The version GR1 specifies is correct — only the registry is wrong.**
+**Sửa:** `ghcr.io/projectnessie/nessie:0.90.4`. Đã kiểm có mặt bằng cách liệt kê toàn bộ 350 tag trên
+GHCR. **Version GR1 chọn là đúng; chỉ registry là sai.**
 
 ---
 
 ## A5. The Nessie image cannot run an HTTP healthcheck
 
-**Not stated in GR1**, but it follows directly from Appendix B's stack and is worth
-recording because it produces a *silent* failure.
+**GR1 không nêu điều này**, nhưng nó suy ra trực tiếp từ stack của Appendix B, và đáng ghi lại vì nó
+gây ra một lỗi *im lặng*.
 
-Nessie is built on a minimal base image that ships **neither `curl` nor `wget`**. A Compose
-healthcheck like `curl -fsS http://localhost:19120/api/v2/config` therefore fails **forever**
-— not because Nessie is unhealthy, but because the probe binary does not exist.
+Nessie được build trên một base image tối giản, **không có `curl` lẫn `wget`**. Một healthcheck kiểu
+`curl -fsS http://localhost:19120/api/v2/config` vì vậy **fail mãi mãi**, không phải vì Nessie hỏng mà
+vì chương trình để probe không tồn tại.
 
-**Why that matters:** the container is marked permanently unhealthy, and every service with
-`depends_on: nessie: {condition: service_healthy}` — **Trino and Spark, the two most
-important consumers** — never starts. The stack appears to hang with no useful error.
+**Vì sao quan trọng:** container bị đánh dấu unhealthy vĩnh viễn, và mọi service có
+`depends_on: nessie: {condition: service_healthy}`, gồm **Trino và Spark, hai consumer quan trọng
+nhất**, sẽ không bao giờ khởi động. Stack trông như bị treo mà không có lỗi gì hữu ích.
 
-**Fix:** no healthcheck on Nessie; dependents use `condition: service_started`; readiness is
-probed **from the host**, where curl exists. Verified:
+**Sửa:** không đặt healthcheck cho Nessie; các service phụ thuộc dùng `condition: service_started`;
+kiểm tra sẵn sàng được làm **từ host**, nơi có curl. Đã kiểm:
 
 ```
 $ curl -fsS http://localhost:19120/api/v2/config
@@ -336,44 +341,43 @@ $ curl -fsS http://localhost:19120/api/v2/config
 
 ## A6. PostgreSQL sends no before image, so §4.2's envelope cannot hold for that source
 
-**GR1 §4.2** requires Bronze to store *"the unmodified Debezium change envelope, including the
-before/after row state."* **GR1 Appendix A.2** gives the PostgreSQL DDL, and it never sets a
-replica identity — so every table keeps PostgreSQL's default.
+*(PostgreSQL không gửi before image, nên envelope của §4.2 không thể đạt cho nguồn này)*
 
-**What that default means:** for an `UPDATE`, PostgreSQL writes only the *primary key* of the
-old row into the WAL. There is nothing else for logical decoding to hand over, so Debezium
-emits:
+**GR1 §4.2** yêu cầu Bronze lưu *"the unmodified Debezium change envelope, including the
+before/after row state."* **GR1 Appendix A.2** đưa ra DDL PostgreSQL nhưng không đặt replica
+identity, nên mọi bảng giữ mặc định của PostgreSQL.
+
+**Mặc định đó nghĩa là gì:** với một `UPDATE`, PostgreSQL chỉ ghi *primary key* của dòng cũ vào WAL.
+Logical decoding không còn gì khác để đưa ra, nên Debezium phát:
 
 ```json
 {"op": "u", "before": null, "after": { ... }}
 ```
 
-**`before` is null on every PostgreSQL update.** Observed directly: `mosaic.postgres.public.products`
-and `.inventory` each returned 300 events with `op=u` and **0 before images**, while
-`mosaic.mysql.ecommerce_tx.orders` — same platform, same connector family — returned 79 update
-events with 79 before images. MySQL's `binlog_row_image=FULL` (which Appendix B *does* set)
-has no PostgreSQL counterpart in Appendix A.
+**`before` là null trên mọi UPDATE của PostgreSQL.** Quan sát trực tiếp:
+`mosaic.postgres.public.products` và `.inventory` mỗi topic trả về 300 event `op=u` với **0 before
+image**, trong khi `mosaic.mysql.ecommerce_tx.orders` (cùng nền tảng, cùng họ connector) trả về 79
+update event với 79 before image. `binlog_row_image=FULL` của MySQL (Appendix B *có* đặt) không có
+cấu hình tương ứng phía PostgreSQL trong Appendix A.
 
-**Why it matters twice over:**
+**Vì sao quan trọng, theo hai nghĩa:**
 
-1. §4.2's envelope requirement is simply unsatisfiable for the PostgreSQL half of the system.
-   Bronze would store a permanently half-empty envelope and nobody would notice, because a
-   null `before` looks like a valid absence rather than a missing capability.
-2. **ADR 0004's central claim becomes unprovable on that source.** The argument against SMT
-   masking is that it leaks the *before* image of PII updates. On a source that emits no
-   before image, neither approach can be distinguished — the evidence has to come from MySQL,
-   or the replica identity has to change.
+1. Yêu cầu envelope của §4.2 đơn giản là **không thể thoả** cho nửa PostgreSQL của hệ thống. Bronze
+   sẽ lưu một envelope vĩnh viễn thiếu một nửa mà không ai nhận ra, vì `before: null` trông như "hợp
+   lệ là không có" chứ không giống "thiếu khả năng".
+2. **Claim trung tâm của ADR 0004 trở nên không chứng minh được trên nguồn này.** Lập luận chống SMT
+   masking là nó làm rò ảnh *before* của các UPDATE PII. Trên một nguồn không phát before image thì
+   không phân biệt được hai cách tiếp cận, nên bằng chứng phải lấy từ MySQL, hoặc phải đổi replica
+   identity.
 
-**Fix:** `ALTER TABLE ... REPLICA IDENTITY FULL` on the three tables whose previous state is
-actually read — `users` (PII, so the masking claim is testable), `inventory` (the fast-moving
-fact the L0 failure turns on) and `products` (price history). Now in
-`domains/ecommerce/ddl/postgres.sql`.
+**Sửa:** `ALTER TABLE ... REPLICA IDENTITY FULL` trên ba bảng mà trạng thái trước thực sự được dùng
+tới: `users` (có PII, để claim masking kiểm được), `inventory` (thông tin thay đổi nhanh mà lỗi L0
+xoay quanh) và `products` (lịch sử giá). Đã có trong `domains/ecommerce/ddl/postgres.sql`.
 
-**Cost, stated honestly:** `FULL` writes the entire old row into the WAL on every UPDATE and
-DELETE, so WAL volume grows with row width. That is why it is applied to three named tables
-rather than to the whole schema.
+**Chi phí, nói thẳng:** `FULL` ghi cả dòng cũ vào WAL ở mỗi UPDATE và DELETE, nên khối lượng WAL tăng
+theo độ rộng dòng. Đó là lý do chỉ áp cho ba bảng được nêu tên chứ không áp cho cả schema.
 
-**Evidence after the fix** — the same lever, end to end, `python mosaic.py stockout`:
+**Bằng chứng sau khi sửa**, dùng đúng công tắc L0 từ đầu tới cuối, `python mosaic.py stockout`:
 
 ```json
 {"op": "u",
@@ -382,55 +386,56 @@ rather than to the whole schema.
  "source_ts_ms": 1787889547921}
 ```
 
-That is the L0 event with its previous state intact and a source commit timestamp — exactly
-what N1 will read as `last_cdc(d)`.
+Đó là sự kiện L0 với trạng thái trước còn nguyên và một timestamp commit ở nguồn, đúng thứ N1 sẽ đọc
+làm `last_cdc(d)`.
 
 ---
 
 ## A7. Connector-native masking truncates the hash to the source column's width
 
-**Not stated in GR1** — Appendix C uses SMTs, and this behaviour belongs to the connector-native
-mechanism that replaced them (ADR 0004). It is recorded because it is silent, and because the
-obvious verification ("is it a SHA-256 hash?") reports a **false failure** if you do not know it.
+*(Masking native cắt hash theo độ rộng cột nguồn)*
 
-Two columns, one masking rule (`column.mask.hash.SHA-256.with.salt.mosaicPiiSalt`):
+**GR1 không nêu điều này.** Appendix C dùng SMT; hành vi này thuộc cơ chế native đã thay thế chúng
+(ADR 0004). Ghi lại vì nó im lặng, và vì phép kiểm hiển nhiên ("đây có phải hash SHA-256 không?") sẽ
+báo **sai là fail** nếu không biết điều này.
 
-| Source column | Declared type | Hash emitted |
+Hai cột, một luật mask (`column.mask.hash.SHA-256.with.salt.mosaicPiiSalt`):
+
+| Cột nguồn | Kiểu khai báo | Hash phát ra |
 |---|---|---|
-| `orders.buyer_email` | `VARCHAR(255)` | `43883ab2…08082` — **64 hex chars**, the full digest |
-| `orders.buyer_phone` | `VARCHAR(32)` | `1e3ebf29…2736c` — **32 hex chars**, half the digest |
-| `users.phone` (PostgreSQL) | `TEXT` | 64 hex chars, full digest |
+| `orders.buyer_email` | `VARCHAR(255)` | `43883ab2…08082`: **64 ký tự hex**, digest đầy đủ |
+| `orders.buyer_phone` | `VARCHAR(32)` | `1e3ebf29…2736c`: **32 ký tự hex**, nửa digest |
+| `users.phone` (PostgreSQL) | `TEXT` | 64 ký tự hex, digest đầy đủ |
 
-Debezium shortens the hash to the declared width of the column it replaces. No warning is
-logged; the value still *looks* like a hash.
+Debezium cắt hash cho vừa độ rộng khai báo của cột nó thay thế. Không có cảnh báo nào được log; giá
+trị vẫn *trông như* một hash.
 
-**What it does and does not mean.** The value remains a one-way salted digest, so no plaintext
-reaches Kafka and Table 4.5's guarantee holds. But the property is now width-dependent: a
-`VARCHAR(10)` PII column would yield a 40-bit digest, and for a low-entropy, fixed-format value
-such as a national phone number, that is within brute-force reach of anyone holding the salt.
-**The strength of the mask is a property of the source DDL, not of the masking configuration** —
-which is exactly the kind of coupling a reviewer should be told about rather than left to find.
+**Ý nghĩa và không ý nghĩa.** Giá trị vẫn là digest một chiều có salt, nên không có plaintext nào tới
+Kafka và cam kết của Table 4.5 vẫn đúng. Nhưng độ mạnh giờ phụ thuộc vào độ rộng: một cột PII
+`VARCHAR(10)` sẽ cho digest 40 bit, và với một giá trị ít entropy, định dạng cố định như số điện thoại
+trong nước, mức đó nằm trong tầm brute-force của ai đang giữ salt. **Độ mạnh của mask là thuộc tính
+của DDL nguồn, không phải của cấu hình masking.** Đó đúng là loại ràng buộc ngầm nên báo cho người
+review biết thay vì để họ tự tìm ra.
 
-**How it is handled here:** `tools/cdc/verify.py` reads `character_maximum_length` from
-`information_schema` at verification time and expects `min(64, width)` hex characters, so a
-truncated mask is *reported* rather than silently accepted:
+**Xử lý ở đây:** `tools/cdc/verify.py` đọc `character_maximum_length` từ `information_schema` lúc
+kiểm và kỳ vọng `min(64, width)` ký tự hex, nên một mask bị cắt được *báo ra* chứ không âm thầm chấp
+nhận:
 
 ```
 NOTE: buyer_phone is narrower than a SHA-256 digest, so the mask is truncated
       to 32 hex chars (128 bits)
 ```
 
-`buyer_phone` is left at `VARCHAR(32)` deliberately: Appendix A's schema is kept faithful, 128
-bits is not a practical weakness, and the finding is more useful to the report than the fix
-would be. Widening a masked column to 64 characters is the remedy where full-digest strength
-is required.
+`buyer_phone` được cố ý để nguyên `VARCHAR(32)`: giữ schema Appendix A trung thực, 128 bit không phải
+điểm yếu thực tế, và phát hiện này có ích cho báo cáo hơn bản sửa. Mở rộng cột bị mask lên 64 ký tự là
+cách khắc phục khi cần độ mạnh digest đầy đủ.
 
 ---
 
 ## A8. "Restart safety" is at-least-once with a replay window, not exactly-once
 
-**Measured in M2.** The correction is one of degree rather than of kind — but the degree is
-exactly what a downstream layer has to be built for.
+**Đo ở M2.** Đây là sự hiệu chỉnh về **mức độ**, không phải về bản chất, nhưng mức độ đó chính là thứ
+tầng downstream phải được xây để chịu được.
 
 ### What GR1 says
 
@@ -440,89 +445,90 @@ exactly what a downstream layer has to be built for.
 > **Table 4.1** — Debezium is chosen partly for *"restart safety achieved through Kafka-stored
 > source offsets"*.
 
-Both true. Neither says **when** that offset is written.
+Cả hai đều đúng, nhưng không câu nào nói offset được ghi **khi nào**.
 
 ### What actually happens
 
-It is written on a **timer**:
+Offset được ghi **theo đồng hồ**:
 
 ```
-offset.flush.interval.ms = 60000        # read from the live worker; the Connect default
+offset.flush.interval.ms = 60000        # đọc từ worker đang chạy; là mặc định của Connect
 ```
 
-Not per record, and not on crash — a SIGKILL has no opportunity to flush anything. So the
-offset in `_connect_offsets` trails the last produced record by up to a minute, and on restart
-Debezium resumes from that stale position and **re-reads everything committed since**.
+Không ghi sau từng record, và cũng không ghi khi sập, vì một SIGKILL không cho cơ hội flush gì cả. Vậy
+offset trong `_connect_offsets` chậm hơn record cuối cùng tới một phút, và khi restart Debezium chạy
+tiếp từ vị trí cũ đó, **đọc lại mọi thứ đã commit kể từ đó**.
 
-### Evidence
+### Evidence (bằng chứng)
 
-`python mosaic.py restart-safety --rate 25 --warmup 20 --stall 45 --drain 20`, with the worker
-stopped by **SIGKILL** — not `docker stop`, which flushes offsets on the way out and therefore
-proves materially less:
+`python mosaic.py restart-safety --rate 25 --warmup 20 --stall 45 --drain 20`, worker bị dừng bằng
+**SIGKILL** (không phải `docker stop`, vì `docker stop` flush offset trước khi tắt nên chứng minh được
+ít hơn hẳn):
 
-| Captured table | id range written during the outage | rows | missing | duplicates |
+| Bảng capture | dải id ghi trong lúc sập | số dòng | missing | duplicates |
 |---|---|---|---|---|
 | `ecommerce_tx.orders` | 27000..28054 | 1,055 | **0** | 36 |
 | `ecommerce_tx.order_items` | 52728..54617 | 1,890 | **0** | 48 |
 | `ecommerce_tx.payments` | 23612..24282 | 671 | **0** | 20 |
 | `public.users` | 5614..5708 | 95 | **0** | 6 |
 
-Committed offsets did resume and advance: `mysql-bin.000007:1238339 → :2399951`
-(GTID `…:1-61738 → …:1-63546`, 1,808 transactions) and PostgreSQL `lsn 70936688 → 72250344`.
-Fully caught up **30.3 s** after restart, with writes continuing 28.4 s into the recovery.
+Offset đã commit có chạy tiếp và tiến lên: `mysql-bin.000007:1238339 → :2399951` (GTID
+`…:1-61738 → …:1-63546`, 1,808 transaction) và PostgreSQL `lsn 70936688 → 72250344`. Đuổi kịp hoàn
+toàn **30.3 s** sau restart, trong khi việc ghi vẫn tiếp tục 28.4 s vào giai đoạn hồi phục.
 
-**Rows lost: zero. Duplicate events: 110.** That is the mechanism working exactly as designed,
-and a harness that scored duplicates as failure would report a false negative on it.
+**Mất: 0 dòng. Trùng: 110 event.** Đó là cơ chế chạy đúng như thiết kế, và một harness chấm trùng lặp
+là thất bại sẽ báo false negative cho nó.
 
-### What it changes
+### What it changes (nó thay đổi gì)
 
-Nothing in the architecture. It sharpens one claim and creates one obligation.
+Kiến trúc không đổi gì. Nó làm sắc nét một claim và tạo ra một nghĩa vụ.
 
-1. **The claim.** "No data loss on connector restart" is correct; "exactly-once" would not be.
-   The replay window is bounded by `offset.flush.interval.ms`, **not by the length of the
-   outage** — a 5-second crash and a 5-minute crash replay the same ~60 s of work. Lowering the
-   interval shrinks the window at the cost of more frequent offset commits.
-2. **The obligation.** GR1 §4.2 already says Bronze should *"deduplicate using the source offset
-   as an idempotency key."* A8 turns that from a design nicety into a measured requirement:
-   **~110 duplicate events per crash is what Bronze will actually receive.** M3 must implement
-   it, and the key is the source coordinates — `(file, pos, row)` for MySQL, `(lsn, txId)` for
-   PostgreSQL — not the business primary key.
+1. **Claim.** "No data loss on connector restart" là đúng; "exactly-once" thì sai. Cửa sổ replay bị
+   chặn bởi `offset.flush.interval.ms`, **không phải bởi độ dài lần sập**: sập 5 giây hay 5 phút đều
+   phát lại khoảng 60 s công việc như nhau. Giảm chu kỳ thì cửa sổ thu hẹp, đổi lại phải commit
+   offset thường xuyên hơn.
+2. **Nghĩa vụ.** GR1 §4.2 đã nói Bronze nên *"deduplicate using the source offset as an idempotency
+   key"*. A8 biến câu đó từ một ý hay trong thiết kế thành **một yêu cầu đã được đo**: khoảng 110
+   event trùng mỗi lần sập là thứ Bronze sẽ thực sự nhận. M3 phải implement nó, và khoá là **toạ độ
+   nguồn** (`(file, pos, row)` cho MySQL, `(lsn, txId)` cho PostgreSQL), không phải primary key nghiệp
+   vụ.
 
-### Correction (M3): the "duplicates" column above is not a count of replays
+### Correction (M3): cột "duplicates" ở trên không phải là số replay
 
-M2's harness counted *events per key beyond the first*. That also counts a row legitimately
-inserted and then updated inside the window -- an order advancing `pending -> paid` is two
-source events, not one event twice -- and it ignored tables without a generated key
-(`inventory`, `products`) entirely. So "110" mixes replays with ordinary updates on four
-tables and omits two others.
+Harness M2 đếm *số event trên mỗi key vượt quá cái đầu tiên*. Cách đếm đó cũng tính cả một dòng được
+insert hợp lệ rồi update trong cửa sổ (một order đi từ `pending -> paid` là hai source event, không
+phải một event giao hai lần), và bỏ qua hoàn toàn các bảng không có khoá tự sinh (`inventory`,
+`products`). Vậy "110" là con số lẫn lộn replay với update bình thường trên bốn bảng, và thiếu hai
+bảng khác.
 
-M3 changed the metric to what the claim needs: **the same source event delivered more than
-once**, matched on op, source position (`file/pos/row` or `lsn/txId`, plus `source.ts_ms`) and
-both images. The comparable M3 run (SIGKILL, 45 s, 25 ops/s, 2026-10-05) measured **183
-replayed events across six tables**, 54 of them replayed inserts; the old metric on the same run
-read 138 over the four keyed tables. Gap-freedom was unaffected (0 missing, again), and so is
-every conclusion above -- the replay window is real and Bronze must absorb it. M3 then
-**proved it does** (see the M3 section of BUILD-LOG): every one of the 1,088 + 1,980 + 719 + 95
-inserts in the bracketed ranges is in Bronze exactly once, although Kafka received 1,107 +
-2,010 + 724 + 95 of them.
+M3 đổi metric thành đúng thứ claim cần: **cùng một source event được giao hơn một lần**, khớp theo
+op, vị trí nguồn (`file/pos/row` hoặc `lsn/txId`, cộng `source.ts_ms`) và cả hai image. Lần chạy M3
+tương đương (SIGKILL, 45 s, 25 ops/s, 2026-10-05) đo được **183 event bị replay trên sáu bảng**, 54
+trong đó là insert bị replay; metric cũ trên cùng lần chạy đọc ra 138 trên bốn bảng có khoá. Tính
+không-gap không bị ảnh hưởng (lại 0 missing), và mọi kết luận trên cũng vậy: cửa sổ replay là có thật
+và Bronze phải hấp thụ nó. M3 sau đó **chứng minh Bronze làm được** (xem M3 trong BUILD-LOG): từng
+insert trong 1,088 + 1,980 + 719 + 95 insert ở các dải đã khoanh có mặt trong Bronze đúng một lần, dù
+Kafka nhận 1,107 + 2,010 + 724 + 95.
 
 ### Status
 
-**Verified.** Reproducible on demand with `python mosaic.py restart-safety`; every run appends
-to `experiments/results/restart_events.jsonl`. Since M3, `python mosaic.py bronze-verify
-exactly-once` carries the same run through to Bronze.
+**Verified.** Tái hiện được theo yêu cầu bằng `python mosaic.py restart-safety`; mỗi lần chạy thêm
+một dòng vào `experiments/results/restart_events.jsonl`. Từ M3, `python mosaic.py bronze-verify
+exactly-once` theo cùng lần chạy đó tới tận Bronze.
 
 ---
 
 ## A9. §4.4's WAL-accumulation guard was inert as configured
 
-**The strongest finding of M2**, and structurally the same failure as A6: a mitigation GR1
-names in prose, configured in good faith, silently doing nothing.
+*(Cơ chế chống phình WAL của §4.4 vô hiệu với cấu hình như viết)*
+
+**Phát hiện mạnh nhất của M2**, và về cấu trúc là cùng một dạng lỗi với A6: một biện pháp GR1 nêu
+trong văn xuôi, được cấu hình một cách thiện chí, nhưng âm thầm không làm gì.
 
 ### What GR1 says
 
-§4.4 identifies the PostgreSQL-specific operational risk correctly — it is the one place where
-the two CDC mechanisms differ in kind rather than in detail:
+§4.4 nhận diện đúng rủi ro vận hành riêng của PostgreSQL, và đây là chỗ duy nhất hai cơ chế CDC khác
+nhau về *bản chất* chứ không chỉ về chi tiết:
 
 > *"because a logical replication slot prevents PostgreSQL from removing WAL segments until
 > Debezium has processed them, a prolonged Debezium outage causes WAL to accumulate on disk and
@@ -530,90 +536,95 @@ the two CDC mechanisms differ in kind rather than in detail:
 > heartbeat events that advance the confirmed-flush position even when the monitored tables
 > receive no application writes."*
 
-That is right, and the implementation configured exactly it:
+Tóm ý: replication slot ngăn PostgreSQL xoá WAL cho tới khi Debezium xử lý xong, nên Debezium sập
+lâu thì WAL tích tụ và có thể làm đầy ổ. Rủi ro được giảm bằng heartbeat định kỳ, đẩy vị trí
+confirmed-flush lên kể cả khi các bảng được theo dõi không có ai ghi.
+
+Điều đó đúng, và bản implement đã cấu hình đúng như vậy:
 
 ```json
 "heartbeat.interval.ms": "10000",
 "heartbeat.action.query": "INSERT INTO public.cdc_heartbeat(ts) VALUES (now())"
 ```
 
-### Why it did not work
+### Why it did not work (vì sao không chạy)
 
-`mosaic_pub` published four tables — `users`, `products`, `categories`, `inventory` — and
-**not `cdc_heartbeat`**. `pgoutput` decodes only *published* tables. So the heartbeat's
-`INSERT` wrote WAL that Debezium never received as a change event, gained no new LSN to
-confirm, and `confirmed_flush_lsn` did not move.
+`mosaic_pub` publish bốn bảng (`users`, `products`, `categories`, `inventory`) và **không có
+`cdc_heartbeat`**. `pgoutput` chỉ giải mã bảng *đã publish*. Vì vậy câu `INSERT` heartbeat ghi ra WAL
+mà Debezium không bao giờ nhận thành change event, không có LSN mới để xác nhận, và
+`confirmed_flush_lsn` không nhúc nhích.
 
-Every visible signal said the heartbeat was healthy, and it was: 503 rows in `cdc_heartbeat`,
-503 messages on `__debezium-heartbeat.mosaic.postgres`. **The guard was firing and achieving
-nothing** — no error, no warning, no log line.
+Mọi tín hiệu nhìn thấy được đều nói heartbeat khoẻ, và nó khoẻ thật: 503 dòng trong `cdc_heartbeat`,
+503 message trên `__debezium-heartbeat.mosaic.postgres`. **Guard vẫn bắn nhưng không đạt được gì**,
+không lỗi, không cảnh báo, không dòng log nào.
 
 ### Evidence
 
-`python mosaic.py wal-guard --idle 130`, captured tables idle, connector **healthy** throughout:
+`python mosaic.py wal-guard --idle 130`, các bảng capture nhàn rỗi, connector **khoẻ** suốt quá
+trình:
 
-| Sample | `confirmed_flush_lsn` | `current_wal_lsn` | retained WAL |
+| Mẫu | `confirmed_flush_lsn` | `current_wal_lsn` | retained WAL |
 |---|---|---|---|
-| start | `0/40D3EA8` | `0/4175C28` | 2,216,816 |
-| +130 s | `0/40D3EA8` *(frozen)* | `0/4176308` *(advancing)* | 2,218,576 |
+| bắt đầu | `0/40D3EA8` | `0/4175C28` | 2,216,816 |
+| +130 s | `0/40D3EA8` *(đứng yên)* | `0/4176308` *(đang tiến)* | 2,218,576 |
 
-WAL advancing while the confirmed-flush position does not **is** the unbounded-retention
-condition §4.4 describes. The guard meant to prevent it was the thing that was broken.
+WAL tiến trong khi vị trí confirmed-flush đứng yên **chính là** tình trạng giữ WAL không giới hạn mà
+§4.4 mô tả. Thứ được đặt ra để ngăn nó lại chính là thứ bị hỏng.
 
-### The fix
+### The fix (bản sửa)
 
-One table, in two places — the publication and the connector's capture list:
+Thêm một bảng vào hai chỗ: publication và danh sách capture của connector.
 
 ```sql
-ALTER PUBLICATION mosaic_pub ADD TABLE cdc_heartbeat;   -- and in domains/ecommerce/ddl/postgres.sql
+ALTER PUBLICATION mosaic_pub ADD TABLE cdc_heartbeat;   -- và trong domains/ecommerce/ddl/postgres.sql
 ```
 ```json
 "table.include.list": "public.users,public.products,public.categories,public.inventory,public.cdc_heartbeat"
 ```
 
-Re-measured over the same 130 s idle window:
+Đo lại trên cùng cửa sổ nhàn rỗi 130 s:
 
-| idle, connector alive | `confirmed_flush_lsn` advance |
+| nhàn rỗi, connector sống | mức tiến `confirmed_flush_lsn` |
 |---|---|
-| heartbeat table outside the publication | **0 bytes** |
-| heartbeat table published | **688,776 bytes** |
+| bảng heartbeat ngoài publication | **0 byte** |
+| bảng heartbeat được publish | **688,776 byte** |
 
-Retained WAL fell from 704,880 to **4,544 bytes**. `cdc-verify` then showed the heartbeat
-flowing through CDC as an ordinary captured table (67 `op=c` events on its own topic), so the
-fix is visible end-to-end and not only in the slot statistics.
+Retained WAL giảm từ 704,880 xuống **4,544 byte**. `cdc-verify` sau đó cho thấy heartbeat chảy qua
+CDC như một bảng capture bình thường (67 event `op=c` trên topic riêng của nó), nên bản sửa thấy được
+từ đầu tới cuối chứ không chỉ trong thống kê slot.
 
-### One honest limit, worth stating in the report
+### One honest limit, worth stating in the report (một giới hạn cần nói thẳng)
 
-The heartbeat's `INSERT` is issued **by the connector**. Killing the worker therefore stops the
-only writer, the database goes genuinely idle, and no WAL accumulates. The guard protects *an
-idle capture set beside a busy database* — the case measured above. **It cannot protect anything
-while the consumer itself is down**, which is the scenario §4.4's phrase *"a prolonged Debezium
-outage"* most naturally suggests. There, the real bounds are `wal_keep_size` and disk.
+Câu `INSERT` heartbeat **do chính connector phát ra**. Kill worker là dừng người ghi duy nhất,
+database trở nên nhàn rỗi thật, và không có WAL nào tích tụ. Guard bảo vệ trường hợp *tập bảng
+capture nhàn rỗi bên cạnh một database bận rộn*, đúng là trường hợp đã đo ở trên. **Nó không bảo vệ
+được gì khi chính consumer đang chết**, mà đó lại là kịch bản cụm từ *"a prolonged Debezium outage"*
+của §4.4 gợi ra tự nhiên nhất. Trong kịch bản đó, giới hạn thật là `wal_keep_size` và dung lượng đĩa.
 
 ### Impact on GR1's claims
 
-§4.4's analysis of the risk survives intact and is one of the report's better passages. What
-does not survive is the implicit assumption that configuring `heartbeat.action.query` is
-sufficient: **the heartbeat only guards WAL if the connector can see its own writes.** Add that
-sentence to §4.4.
+Phân tích rủi ro của §4.4 vẫn đứng vững và là một trong những đoạn tốt của báo cáo. Thứ không đứng
+vững là giả định ngầm rằng chỉ cần cấu hình `heartbeat.action.query` là đủ: **heartbeat chỉ bảo vệ
+WAL nếu connector nhìn thấy chính các lần ghi của nó.** Nên thêm câu đó vào §4.4.
 
-Pair this with A6 when writing GR2. Both are PostgreSQL-side mitigations that GR1 states
-correctly at the level of intent and that fail silently at the level of configuration; neither
-is discoverable by reading, only by measuring. Two independent instances make it a pattern
-rather than an anecdote — and that pattern is a defensible answer to *"what did the
-implementation phase actually contribute?"*
+Khi viết GR2, ghép phát hiện này với A6. Cả hai là biện pháp phía PostgreSQL mà GR1 nêu đúng ở mức ý
+định nhưng âm thầm thất bại ở mức cấu hình; không cái nào phát hiện được bằng cách đọc, chỉ bằng cách
+đo. Hai trường hợp độc lập biến nó thành một **pattern** chứ không còn là giai thoại, và pattern đó
+là một câu trả lời đứng vững cho *"giai đoạn implement thực sự đóng góp gì?"*
 
 ### Status
 
-**Verified, with a before/after pair.** Both runs are kept in
-`experiments/results/restart_events.jsonl`. The failing one is the evidence.
+**Verified, có cặp trước/sau.** Cả hai lần chạy được giữ trong
+`experiments/results/restart_events.jsonl`. Lần fail chính là bằng chứng.
 
 ---
 
 ## A10. §4.2's "replay capability" expires with Kafka retention
 
-**Found in M3, twice.** The same shape as A6 and A9: a property the report states without its
-precondition.
+*("Khả năng replay" của §4.2 hết hạn theo Kafka retention)*
+
+**Phát hiện ở M3, hai lần.** Cùng dạng với A6 và A9: một thuộc tính báo cáo khẳng định mà không nêu
+điều kiện tiên quyết của nó.
 
 ### What GR1 says
 
@@ -623,101 +634,104 @@ precondition.
 
 ### What actually happens
 
-Kafka runs its default `log.retention.hours=168`; nothing in Appendix B overrides it. Retention
-is enforced on wall-clock time, including **the moment a stopped broker starts again** -- before
-any consumer has had a chance to read.
+Kafka chạy với mặc định `log.retention.hours=168` (7 ngày); không có gì trong Appendix B ghi đè giá
+trị này. Retention được thực thi theo **giờ thực**, kể cả **ngay lúc một broker đã dừng khởi động
+lại**, tức là trước khi bất kỳ consumer nào kịp đọc.
 
-| Date | Situation | Earliest retained offsets |
+| Ngày | Tình huống | Offset sớm nhất còn giữ |
 |---|---|---|
-| 2026-09-12 | M1 snapshotted on 2026-08-28; Bronze did not exist yet | `orders` 113,993 of 125,464; `categories` **144 of 144 -- an empty topic** (categories never change after seeding) |
-| 2026-10-05 | stack stopped since ~2026-09-25 (Docker Desktop restart) | **every one of the 7 table topics: earliest == latest**. Bronze's own checkpoint pointed at offsets that no longer existed and the stream failed with `OffsetOutOfRange` |
+| 2026-09-12 | M1 snapshot ngày 2026-08-28; Bronze chưa tồn tại | `orders` 113,993 trên 125,464; `categories` **144 trên 144, tức topic rỗng** (categories không đổi sau khi seed nên không có event mới nào) |
+| 2026-10-05 | stack dừng từ khoảng 2026-09-25 (Docker Desktop restart) | **cả 7 topic bảng: earliest == latest**. Checkpoint của Bronze trỏ vào offset không còn tồn tại và stream lỗi `OffsetOutOfRange` |
 
-A Bronze stream bootstrapped from the topics at either point could never have seen a row that
-existed only in the deleted range -- in the first case, not one category.
+Một Bronze stream bootstrap từ topic ở cả hai thời điểm sẽ không bao giờ thấy được dòng nào chỉ tồn
+tại trong phần đã bị xoá. Ở lần đầu, nó sẽ không thấy nổi một category nào.
 
 ### What we do instead
 
-- **Recovery:** a Debezium **BLOCKING ad-hoc snapshot** over a Kafka signal channel
-  (`python mosaic.py resnapshot`). It needs no source grants and no publication change -- an
-  incremental snapshot would need a signalling table, i.e. an `INSERT` grant GR1 Appendix A
-  deliberately withholds from `cdc`. Measured 2026-10-05: all 7 tables re-emitted **exactly**
-  their source row counts (114,709 `op=r` events, 40.4 s), and Bronze landed every one
-  (`n = distinct keys = source rows` per table).
-- **Detection:** the Bronze stream keeps Spark's `failOnDataLoss=true`, so a gap is a crashed
-  container, not a silent skip. Its pairing guard refuses to start when the checkpoint has
-  progress but the table is gone. `--reset-checkpoint` *renames* the checkpoint rather than
-  deleting it.
+- **Khôi phục:** một Debezium **BLOCKING ad-hoc snapshot** qua Kafka signal channel
+  (`python mosaic.py resnapshot`). Cách này không cần thêm quyền ở nguồn và không cần sửa publication.
+  Một *incremental* snapshot thì cần một bảng signal, tức là cần quyền `INSERT` mà GR1 Appendix A cố ý
+  không cấp cho `cdc`. Đo ngày 2026-10-05: cả 7 bảng phát lại **đúng** số dòng ở nguồn (114,709 event
+  `op=r`, 40.4 s), và Bronze nạp đủ từng event (`n = distinct keys = source rows` mỗi bảng).
+- **Phát hiện:** Bronze stream giữ `failOnDataLoss=true` của Spark, nên một khoảng hở dẫn tới
+  container crash, không bị bỏ qua âm thầm. Cơ chế kiểm cặp của nó từ chối khởi động khi checkpoint đã
+  có tiến độ mà bảng thì không còn. `--reset-checkpoint` *đổi tên* checkpoint thay vì xoá.
 
 ### Impact on GR1's claims
 
-Replay from Kafka is bounded by retention; **auditability lives in Bronze, not in Kafka** --
-true only once Bronze is landing continuously. Add the precondition to §4.2. A longer retention
-(or `retention.ms=-1` on the CDC topics) would widen the window; it is not done here, because
-the report's design point is that Bronze, not the broker, is the system of record.
+Replay từ Kafka bị giới hạn bởi retention; **khả năng audit nằm ở Bronze, không nằm ở Kafka**, và điều
+đó chỉ đúng khi Bronze nạp liên tục. Nên thêm điều kiện tiên quyết này vào §4.2. Retention dài hơn
+(hoặc `retention.ms=-1` trên các topic CDC) sẽ nới rộng cửa sổ; ở đây không làm vậy, vì quan điểm
+thiết kế của báo cáo là Bronze, chứ không phải broker, mới là system of record.
 
 ### Status
 
-**Verified twice; recovery verified.** Ledger: `experiments/results/snapshot_events.jsonl`.
+**Verified hai lần; việc khôi phục đã verified.** Ledger: `experiments/results/snapshot_events.jsonl`.
 
 ---
 
 ## A11. MySQL `DATETIME` arrives 7 hours off; the harmonisation moves to Silver
 
-**Found in M3.** A consequence of A1 that only becomes visible once rows are typed.
+*(MySQL `DATETIME` đến lệch 7 tiếng; việc chuẩn hoá chuyển sang Silver)*
+
+**Phát hiện ở M3.** Là hệ quả của A1, chỉ lộ ra khi các dòng được ép kiểu.
 
 ### What GR1 says
 
 > **§4.4** — *"the `TimestampConverter` transform harmonizes the differing timestamp
 > representations produced by MySQL and PostgreSQL into a single ISO 8601 format."*
 
-The sentence reads as cosmetic -- one format instead of two.
+Câu này đọc như chuyện **hình thức**: một định dạng thay vì hai.
 
 ### What actually happens
 
-It is semantic. MySQL `DATETIME` has no zone. Under `time.precision.mode=connect` Debezium sends
-it as epoch milliseconds of the **wall clock interpreted as UTC**. MySQL here runs
-`time_zone=SYSTEM` = `+07` (container `TZ=Asia/Ho_Chi_Minh`), so the value is seven hours in
-the future of the instant it describes:
+Thực ra đó là chuyện **ngữ nghĩa**. MySQL `DATETIME` không có múi giờ. Dưới
+`time.precision.mode=connect`, Debezium gửi nó dưới dạng epoch milliseconds của **giờ đồng hồ treo
+tường được hiểu như thể là UTC**. MySQL ở đây chạy `time_zone=SYSTEM` = `+07` (container
+`TZ=Asia/Ho_Chi_Minh`), nên giá trị nằm ở tương lai bảy tiếng so với thời điểm nó mô tả:
 
 ```
-after.created_at  = 1791200479000      -> read as UTC: 2026-10-05 11:41:19
-source.ts_ms      = 1791175279628      -> 2026-10-05 04:41:19.628 UTC   (the commit)
-difference        = 25,199 s  ~ 7 h
+after.created_at  = 1791200479000      -> đọc như UTC: 2026-10-05 11:41:19
+source.ts_ms      = 1791175279628      -> 2026-10-05 04:41:19.628 UTC   (thời điểm commit)
+chênh lệch        = 25,199 s  ~ 7 h
 ```
 
-PostgreSQL `TIMESTAMPTZ` arrives as a correct ISO-8601 instant (`...Z`). Unharmonised, every
-cross-source comparison of event times -- an order against its user, a sale against a stock-out
--- is off by the source's UTC offset.
+PostgreSQL `TIMESTAMPTZ` đến dưới dạng một thời điểm ISO-8601 đúng (`...Z`). Nếu không chuẩn hoá thì
+mọi phép so sánh thời gian giữa hai nguồn (một đơn hàng với người dùng của nó, một lần bán với một lần
+hết hàng) đều lệch đúng bằng offset UTC của nguồn.
 
 ### What we do instead
 
-A1 removed the SMT chain, so the `TimestampConverter` never runs. Silver does the conversion:
-every zone-less source timestamp is read in `MOSAIC_SOURCE_TZ` and stored as
-`timestamp(6) with time zone` (`cdc_decode` kind `wallclock_ms` in
+A1 đã bỏ chuỗi SMT nên `TimestampConverter` không bao giờ chạy. Silver làm việc chuyển đổi: mọi
+timestamp nguồn không có múi giờ được đọc theo `MOSAIC_SOURCE_TZ` và lưu thành
+`timestamp(6) with time zone` (kiểu decode `wallclock_ms` trong
 `pipelines/transform/macros/cdc_current_state.sql`).
 
 ### Evidence
 
-`python -m tools.lakehouse.reconcile` compares Silver with the live sources, timestamps as epoch
-microseconds. With the correct zone: **0 differing rows** in all 7 tables. Negative control with
-`MOSAIC_SOURCE_TZ=UTC`: **every** MySQL row differs (33,605 / 64,556 / 27,837) while the
-PostgreSQL tables stay at 0 -- the conversion is the only thing that makes the two agree.
+`python -m tools.lakehouse.reconcile` so Silver với nguồn sống, timestamp tính bằng epoch
+microseconds. Với múi giờ đúng: **0 dòng khác** ở cả 7 bảng. Negative control với
+`MOSAIC_SOURCE_TZ=UTC`: **mọi** dòng MySQL đều khác (33,605 / 64,556 / 27,837) trong khi các bảng
+PostgreSQL vẫn 0. Phép chuyển đổi là thứ duy nhất làm hai bên khớp nhau.
 
 ### Impact on GR1's claims
 
-§4.4's `TimestampConverter` is load-bearing, not cosmetic. State in §4.4 that MySQL datetimes
-are zone-less and need the source's zone to become instants, wherever that conversion runs.
+`TimestampConverter` của §4.4 là **load-bearing**, không phải hình thức. Nên ghi rõ trong §4.4 rằng
+datetime của MySQL không có múi giờ và cần múi giờ của nguồn để thành một thời điểm thực, dù việc
+chuyển đổi chạy ở đâu.
 
 ### Status
 
-**Verified, with a negative control.** Ledger: `experiments/results/lakehouse_events.jsonl`.
+**Verified, có negative control.** Ledger: `experiments/results/lakehouse_events.jsonl`.
 
 ---
 
 ## A12. §4.3's `gold.orders` partitioning is too fine for the prototype
 
-**Found in M3.** Not a contradiction -- a specification sized for a different scale, which the
-report does not say.
+*(Phân vùng `gold.orders` của §4.3 quá mịn cho prototype)*
+
+**Phát hiện ở M3.** Không phải mâu thuẫn, mà là một đặc tả được thiết kế cho quy mô khác, và báo cáo
+không nói ra quy mô đó.
 
 ### What GR1 says
 
@@ -726,343 +740,342 @@ report does not say.
 
 ### What actually happens
 
-Implemented exactly (`ARRAY['day(created_at)', 'bucket(region, 16)']`). The seed spans 370 days
-and up to 15 region values. The first full build **failed**: `ICEBERG_TOO_MANY_OPEN_PARTITIONS
--- Exceeded limit of 100 open writers`. With the cap raised (D14) it builds, and the table is:
+Đã implement đúng như vậy (`ARRAY['day(created_at)', 'bucket(region, 16)']`). Seed trải dài 370 ngày
+và có tới 15 giá trị region. Lần build đầu **fail**: `ICEBERG_TOO_MANY_OPEN_PARTITIONS -- Exceeded
+limit of 100 open writers`. Nâng giới hạn (D14) thì build được, và bảng như sau:
 
-| `gold.orders` | value |
+| `gold.orders` | giá trị |
 |---|---|
-| rows | 36,678 |
-| partitions | **2,944** |
-| data files | 2,968, **12.6 rows each** on average, 10.5 MB in total |
+| số dòng | 36,678 |
+| số phân vùng | **2,944** |
+| data file | 2,968, trung bình **12.6 dòng mỗi file**, tổng 10.5 MB |
 
-Measured against the same rows in the unpartitioned `silver.orders`:
+So với cùng dữ liệu trong `silver.orders` không phân vùng:
 
-| operation | partitioned (GR1) | unpartitioned | ratio |
+| thao tác | có phân vùng (GR1) | không phân vùng | tỉ lệ |
 |---|---|---|---|
-| `ANALYZE` (§4.5's required post-write step) | 8.25 s | 0.25 s | **33x** |
+| `ANALYZE` (bước sau-ghi bắt buộc của §4.5) | 8.25 s | 0.25 s | **33x** |
 | full scan `count(*), sum(total_amount)` | 1.28 s | 0.09 s | **14x** |
-| incremental MERGE of ~600-2,600 orders (dbt) | 19-30 s | 1.4-2.5 s (Silver) | ~10x |
+| MERGE incremental ~600–2,600 orders (dbt) | 19–30 s | 1.4–2.5 s (Silver) | ~10x |
 
-Two further observations. `bucket(16, region)` over a column with ten or fifteen values is
-identity partitioning with extra steps: each value lands in its own bucket and several buckets
-stay empty. And at GR1's own 10M-row target (§10.1) the same spec gives roughly 3,400 rows per
-partition -- better, but still files of well under a megabyte.
+Thêm hai quan sát. `bucket(16, region)` trên một cột chỉ có mười hay mười lăm giá trị thì thực chất là
+phân vùng theo giá trị (*identity partitioning*) cộng thêm vài bước thừa: mỗi giá trị rơi vào bucket
+riêng và vài bucket để trống. Và ở mục tiêu 10M dòng của chính GR1 (§10.1), cùng spec cho ra khoảng
+3,400 dòng mỗi phân vùng: khá hơn, nhưng file vẫn nhỏ hơn hẳn một megabyte.
 
 ### Impact on GR1's claims
 
-The spec is executable, and is kept as written for now. What the report should add is the scale
-it assumes, and that `ANALYZE` cost grows with partition count -- the overhead §4.5 already
-flags is multiplied by this choice. A month-level time partition (or day without the region
-bucket) would suit the prototype; **that is a design decision left open** -- E2 (Top-N pushdown
-over Gold) is where it should be settled, at `full` scale.
+Spec thực thi được và tạm thời được giữ như viết. Báo cáo nên bổ sung quy mô mà spec giả định, và việc
+chi phí `ANALYZE` tăng theo số phân vùng, nghĩa là overhead §4.5 đã cảnh báo bị nhân lên bởi lựa chọn
+này. Phân vùng theo tháng (hoặc theo ngày nhưng bỏ bucket region) sẽ hợp với prototype hơn; **đây là
+quyết định còn để ngỏ**. E2 (Top-N pushdown trên Gold) là nơi nên chốt, ở quy mô `full`.
+
+*(Bổ sung 2026-10-13: một lần build incremental thay đổi 0 dòng vẫn tốn 45–61 s cho `gold.orders`,
+và chính bảng này đẩy heap Trino lên 6+ GiB trước khi heap bị giới hạn. Xem STATUS finding 15.)*
 
 ### Status
 
-**Measured.** GR1 Listing 4.2's federated query runs against this table in 1.61 s and returns
-its 100 rows.
+**Measured.** Câu query federation ở GR1 Listing 4.2 chạy trên bảng này trong 1.61 s và trả đủ 100
+dòng.
 
 ---
 
-# Part B — Substitutions: same guarantee, lighter tool
+# Part B — Substitutions: cùng cam kết, công cụ nhẹ hơn
 
-Each of these keeps what GR1 *promises* and changes what *delivers* it. Frame every one in
-the report as **"substitution, not omission"**, and name the production-scale original.
+Mỗi mục giữ đúng điều GR1 *hứa*, và chỉ đổi thứ *thực hiện* lời hứa đó. Trong báo cáo, trình bày nhất
+quán mọi mục là **"substitution, not omission"** (thay thế, không phải bỏ sót), và nêu tên thành phần
+gốc dùng ở quy mô production.
 
 ---
 
 ## B1. Apache Ranger → Open Policy Agent
 
-**GR1:** Ranger enforces the five-role hierarchy of Table 4.6 and the query-time column
-masking of Table 4.5 (Layer 2), via its Trino plugin.
+**GR1:** Ranger thực thi phân cấp năm role của Table 4.6 và column masking lúc query của Table 4.5
+(Layer 2), qua plugin Trino.
 
-**Problem:** a working Ranger is *four* moving parts — Ranger Admin, a backing relational
-database, Solr for audit indexing, and the Trino plugin. On the single-node Compose target
-of Appendix B it competes for memory with Kafka, Spark, Trino, MinIO and two databases, and
-historically costs multiple weeks before the first policy evaluates.
+**Vấn đề:** một Ranger chạy được gồm *bốn* thành phần: Ranger Admin, một database quan hệ phía sau,
+Solr để index audit, và plugin Trino. Trên target Compose một máy của Appendix B, nó tranh bộ nhớ với
+Kafka, Spark, Trino, MinIO và hai database, và theo kinh nghiệm thường tốn nhiều tuần trước khi policy
+đầu tiên được đánh giá.
 
-**What we do:** OPA behind Trino's `opa` access-control provider. **Table 4.6's five roles —
-`data_admin`, `data_engineer`, `data_analyst`, `ml_engineer`, `bi_user` — are expressed
-verbatim as Rego.** Column masking stays query-time and role-dependent exactly as Table 4.5
-describes.
+**Ta làm gì:** OPA đứng sau access-control provider `opa` của Trino. **Năm role của Table 4.6
+(`data_admin`, `data_engineer`, `data_analyst`, `ml_engineer`, `bi_user`) được viết nguyên văn bằng
+Rego.** Column masking vẫn chạy lúc query và phụ thuộc role, đúng như Table 4.5 mô tả.
 
-**Kept:** centralised policy; catalog/schema/table/column-level access control; query-time
-column masking; an audit trail of decisions.
+**Giữ được:** policy tập trung; kiểm soát truy cập ở mức catalog/schema/table/column; masking cột lúc
+query; audit trail cho các quyết định.
 
-**Gained — and this is a real argument for the defence:** policy becomes **plain text,
-version-controlled, and unit-testable**. `opa test policies/` runs the role hierarchy as a
-test suite in CI. That is stronger evidence than screenshots of an admin UI. Four containers
-become one.
+**Được thêm, và đây là một lập luận thật cho buổi bảo vệ:** policy trở thành **văn bản thuần, quản lý
+phiên bản được, unit test được**. `opa test policies/` chạy phân cấp role như một test suite trong CI.
+Đó là bằng chứng mạnh hơn ảnh chụp màn hình giao diện admin. Bốn container còn một.
 
-**Lost:** Ranger's policy-authoring web UI (not a project requirement), and its tag-sync
-integration with a catalog. The second matters for N3, which is *why* the tag model is owned
-by `platform/governance/` and handed to OPA as policy data — and that is what makes N3 a
-contribution rather than a configuration exercise.
+**Mất:** giao diện web soạn policy của Ranger (không phải yêu cầu của dự án), và tích hợp tag-sync với
+catalog. Cái thứ hai quan trọng với N3, và *đó là lý do* mô hình tag do `platform/governance/` sở hữu
+rồi giao cho OPA dưới dạng policy data. Chính điều đó làm N3 thành một đóng góp thay vì một bài tập cấu
+hình.
 
-Full argument: [ADR 0001](adr/0001-opa-instead-of-ranger.md).
+Lập luận đầy đủ: [ADR 0001](adr/0001-opa-instead-of-ranger.md).
 
 ---
 
 ## B2. DataHub → OpenLineage + Marquez
 
-**GR1 §3.6:** DataHub provides the catalog and column-level lineage graph, ingesting lineage
-emitted by Airflow and Spark **in OpenLineage format**.
+**GR1 §3.6:** DataHub cung cấp catalog và đồ thị lineage mức cột, nhận lineage do Airflow và Spark phát
+ra **theo định dạng OpenLineage**.
 
-**The decisive observation:** GR1 defines its lineage requirement in terms of the
-**OpenLineage emission path**, not in terms of DataHub. DataHub is one possible *receiver*.
+**Quan sát quyết định:** GR1 định nghĩa yêu cầu lineage theo **đường phát OpenLineage**, không theo
+DataHub. DataHub chỉ là một *bên nhận* khả dĩ.
 
-**Problem:** a production DataHub is five services — GMS, Elasticsearch, the frontend, and
-the MAE/MCE consumers — plus its own Kafka topics. Appendix B's own comment concedes it:
-*"Kept minimal here for GR1."*
+**Vấn đề:** một DataHub production gồm năm service (GMS, Elasticsearch, frontend, và các consumer
+MAE/MCE) cộng các Kafka topic riêng. Chính comment trong Appendix B đã thừa nhận: *"Kept minimal here
+for GR1."*
 
-**What we do:** keep the emission path **exactly as designed**, and receive it with
-**Marquez**, the OpenLineage reference implementation — one service plus a Postgres schema.
+**Ta làm gì:** giữ đường phát **đúng như thiết kế**, và nhận nó bằng **Marquez**, bản implement tham
+chiếu của OpenLineage: một service cộng một schema Postgres.
 
-**Kept:** automatic lineage capture from Spark and dbt with no per-pipeline code changes; a
-navigable lineage graph; dataset-level metadata.
+**Giữ được:** tự động bắt lineage từ Spark và dbt mà không phải sửa code từng pipeline; đồ thị lineage
+duyệt được; metadata mức dataset.
 
-**Gained:** Marquez's dataset-version model records a facet per run, which the Freshness
-Registry (C2/N1) consumes **directly** rather than reconstructing. The lighter choice is
-*better aligned* with the novel component, not merely cheaper.
+**Được thêm:** mô hình dataset-version của Marquez ghi một facet cho mỗi lần chạy, và Freshness
+Registry (C2/N1) đọc **trực tiếp** từ đó thay vì phải tự dựng lại. Lựa chọn nhẹ hơn này *ăn khớp hơn*
+với thành phần mới của đề tài, chứ không chỉ rẻ hơn.
 
-**Lost — state this honestly:** DataHub's richer catalog surface (glossary, ownership,
-search UI) and its **column-level** lineage. dbt gives column-level lineage for the
-Silver/Gold hop, but **the Bronze hop stays table-level.** Record it as a known limitation.
+**Mất, cần nói thẳng:** bề mặt catalog phong phú hơn của DataHub (glossary, ownership, giao diện tìm
+kiếm) và lineage **mức cột** của nó. dbt cho lineage mức cột ở chặng Silver/Gold, nhưng **chặng Bronze
+vẫn chỉ ở mức bảng.** Ghi đây là giới hạn đã biết.
 
-**Reversibility:** because the emission side is unchanged, swapping the receiver back to
-DataHub is a configuration change — which is exactly the extensibility property GR1 §2.3
-asks for.
+**Đảo ngược được:** vì phía phát không đổi, chuyển bên nhận về lại DataHub chỉ là đổi cấu hình, đúng
+thuộc tính mở rộng mà GR1 §2.3 yêu cầu.
 
-Full argument: [ADR 0002](adr/0002-marquez-instead-of-datahub.md).
+Lập luận đầy đủ: [ADR 0002](adr/0002-marquez-instead-of-datahub.md).
 
 ---
 
 ## B3. Spark for Silver/Gold + Great Expectations → dbt-trino
 
-**GR1 Fig. 4.1 / §4.2:** three engines in the processing layer — Spark Structured Streaming,
-dbt, and Great Expectations — with Spark owning the whole write path (Bronze append plus
-merge/upsert into Silver and Gold).
+**GR1 Fig. 4.1 / §4.2:** tầng xử lý có ba engine (Spark Structured Streaming, dbt, và Great
+Expectations), với Spark nắm toàn bộ đường ghi (append vào Bronze, merge/upsert vào Silver và Gold).
 
-**The observation:** those are two different jobs.
+**Quan sát:** đó là hai công việc khác nhau.
 
-- **Bronze landing is genuinely streaming** — consume Debezium topics continuously,
-  normalise the envelope, deduplicate on the source offset, append.
-- **Silver and Gold are batch set-operations** over tables that already live in Iceberg, and
-  **Trino can already write Iceberg via `MERGE INTO`.**
+- **Nạp Bronze thực sự là streaming**: tiêu thụ topic Debezium liên tục, chuẩn hoá envelope, khử trùng
+  theo source offset, append.
+- **Silver và Gold là các phép toán tập hợp theo batch** trên những bảng đã nằm trong Iceberg, và
+  **Trino vốn đã ghi được Iceberg qua `MERGE INTO`.**
 
-**What we do:**
+**Ta làm gì:**
 
-| Tier | Engine |
+| Tầng | Engine |
 |---|---|
-| Bronze | **Spark Structured Streaming** — unchanged. Streaming earns its place here. |
-| Silver, Gold | **dbt models compiled to Trino SQL**, writing Iceberg via `MERGE INTO` |
-| Quality gates | **dbt `tests:` blocks**, replacing Great Expectations |
+| Bronze | **Spark Structured Streaming**, không đổi. Streaming xứng đáng có mặt ở đây. |
+| Silver, Gold | **dbt model biên dịch thành SQL Trino**, ghi Iceberg qua `MERGE INTO` |
+| Quality gates | **khối `tests:` của dbt**, thay Great Expectations |
 
-**Kept:** the medallion semantics of §4.2 exactly — Bronze holds the unmodified envelope;
-Silver is deduplicated, typed, masked, validated; Gold is joined, aggregated, partitioned per
-§4.3. **Spark stays in the architecture and in the report.**
+**Giữ được:** ngữ nghĩa medallion của §4.2 đúng y nguyên. Bronze giữ envelope chưa sửa; Silver được
+khử trùng, ép kiểu, mask, kiểm tra; Gold được join, tổng hợp, phân vùng theo §4.3. **Spark vẫn ở trong
+kiến trúc và trong báo cáo.**
 
-**Gained:** Silver/Gold become declarative SQL instead of imperative Spark jobs — less code,
-and lineage derivable from the DAG for free. No second heavy runtime for batch work.
+**Được thêm:** Silver/Gold trở thành SQL khai báo thay vì job Spark mệnh lệnh: ít code hơn, và lineage
+suy ra được miễn phí từ DAG. Không cần một runtime nặng thứ hai cho việc batch.
 
-**On Great Expectations:** its *function* survives as dbt tests — uniqueness on the dedup
-key, not-null on `_src_ts`, and the **cross-source referential checks §4.3 says no single
-engine can enforce** (an order's `user_id` against the PostgreSQL `users` table). GE's
-surplus expectation vocabulary and data-docs output are lost; the checks §4.3 actually
-specifies are all expressible.
+**Về Great Expectations:** *chức năng* của nó còn nguyên dưới dạng dbt test: unique trên khoá khử
+trùng, not-null trên `_src_ts`, và **các phép kiểm tham chiếu chéo nguồn mà §4.3 nói không engine đơn
+lẻ nào cưỡng chế được** (ví dụ `user_id` của một order so với bảng `users` bên PostgreSQL). Bộ từ vựng
+expectation dư thừa và phần data-docs của GE bị mất; mọi phép kiểm §4.3 thực sự đặc tả đều diễn đạt
+được.
 
-**Note on `ANALYZE`:** GR1 §4.5 requires an `ANALYZE` after each batch write to keep Trino's
-cost-based optimiser correct. That becomes a **dbt post-hook** rather than a separately
-scheduled Airflow task — the operational overhead §4.5 flags is still real, but it is now
-attached to the write that causes it instead of to a timer.
+**Ghi chú về `ANALYZE`:** GR1 §4.5 yêu cầu `ANALYZE` sau mỗi lần ghi batch để optimizer chi phí của
+Trino đúng. Việc này trở thành **dbt post-hook** thay vì một task Airflow lên lịch riêng. Overhead vận
+hành mà §4.5 cảnh báo vẫn có thật, nhưng giờ gắn vào chính lần ghi gây ra nó thay vì gắn vào một bộ hẹn
+giờ.
 
-Full argument: [ADR 0003](adr/0003-dbt-trino-for-silver-gold.md).
+Lập luận đầy đủ: [ADR 0003](adr/0003-dbt-trino-for-silver-gold.md).
 
-**Status (M3): verified.** `MERGE INTO` on Nessie-catalogued Iceberg -- the main technical
-risk ADR 0003 carried -- ran four incremental builds against concurrent writes (inserts plus
-every update kind the load generator makes), after which Silver equalled the live sources row
-for row on every compared column, in all 7 tables (`tools/lakehouse/reconcile.py`). Trino
-commits each MERGE as an `overwrite` with position-delete files (merge-on-read). 67 dbt tests
-replace Great Expectations, including both cross-source referential checks §4.3 names, and
-`ANALYZE` runs as a post-hook on every Gold model.
+**Status (M3): verified.** `MERGE INTO` trên Iceberg do Nessie quản lý, rủi ro kỹ thuật chính mà ADR
+0003 mang theo, đã chạy bốn lần build incremental dưới các lần ghi đồng thời (insert cộng mọi kiểu
+update load generator tạo ra). Sau đó Silver khớp nguồn sống từng dòng trên mọi cột được so, ở cả 7
+bảng (`tools/lakehouse/reconcile.py`). Trino commit mỗi MERGE dưới dạng `overwrite` kèm position-delete
+file (merge-on-read). 67 dbt test thay Great Expectations, gồm cả hai phép kiểm tham chiếu chéo nguồn
+§4.3 nêu tên, và `ANALYZE` chạy như post-hook trên mọi model Gold.
 
 ---
 
 ## B4. Avro + Confluent Schema Registry → JsonConverter
 
-Covered in full under **A2**, because it is a finding first and a substitution second.
+Trình bày đầy đủ ở **A2**, vì đây trước hết là một finding, sau đó mới là một substitution.
 
 ---
 
-# Part C — Additions: what GR1 does not contain
+# Part C — Additions: những gì GR1 không có
 
-GR1 delivered a design. These are the things being **built** that the report either only
-proposed or never mentioned. **This is where the contribution lives.**
+GR1 giao một bản thiết kế. Đây là những thứ đang được **xây** mà báo cáo chỉ mới đề xuất hoặc chưa hề
+nhắc tới. **Đóng góp của đề tài nằm ở đây.**
 
 ---
 
 ## C1. A stated problem, and a four-rung abstraction ladder
 
-**The gap:** GR1 describes the *architecture* thoroughly but **never states the single
-concrete problem the platform exists to solve.** It motivates in the abstract ("fragmentation
-carries a direct cost") and formalises in §5.3, but there is no worked, failing, measurable
-case.
+**Khoảng trống:** GR1 mô tả kiến trúc rất kỹ nhưng **chưa bao giờ phát biểu một bài toán cụ thể** mà
+nền tảng tồn tại để giải. Nó tạo động lực ở mức trừu tượng ("fragmentation carries a direct cost") và
+hình thức hoá ở §5.3, nhưng không có một trường hợp cụ thể, đang hỏng, đo được.
 
-This matters because the advisor's very first question was *"is the final product a platform
-or a tool/API?"* — a question you cannot answer convincingly from an architecture diagram.
+Điều này quan trọng vì câu hỏi đầu tiên của giảng viên hướng dẫn là *"is the final product a platform
+or a tool/API?"*, một câu hỏi không thể trả lời thuyết phục chỉ bằng một sơ đồ kiến trúc.
 
-**What we add:** [`docs/PROBLEM.md`](PROBLEM.md), which names one failing query and climbs
-from it to a generic platform in four rungs, each with an artifact and a **mechanical test**:
+**Ta thêm:** [`docs/PROBLEM.md`](PROBLEM.md): nêu tên một câu query bị hỏng rồi leo từ đó lên một
+nền tảng tổng quát qua bốn bậc, mỗi bậc có một artifact và một **phép thử máy móc**:
 
-| Rung | Question | Artifact | Test |
+| Bậc | Câu hỏi | Artifact | Phép thử |
 |---|---|---|---|
-| **L0** | What concretely breaks today? | the failing query | failure reproducible on demand |
-| **L1** | What is the model of the broken case? | `domains/ecommerce/` | failure is *measurable* |
-| **L2** | What of that is not about commerce? | `platform/` | failure is *fixed* |
-| **L3** | Is the abstraction real or asserted? | `domains/jobmarket/` | second domain runs, zero code change |
+| **L0** | Cụ thể cái gì đang hỏng? | câu query hỏng | lỗi tái hiện được theo yêu cầu |
+| **L1** | Mô hình hoá trường hợp hỏng thế nào? | `domains/ecommerce/` | lỗi *đo được* |
+| **L2** | Phần nào không liên quan tới thương mại? | `platform/` | lỗi *được sửa* |
+| **L3** | Sự trừu tượng là thật hay chỉ là lời nói? | `domains/jobmarket/` | domain thứ hai chạy, không sửa code |
 
-**The L0 failure, concretely:** *"Show the 10 products most relevant to shopper X, right
-now."* Three facts, three systems, three freshness levels:
+**Lỗi L0, cụ thể:** *"Show the 10 products most relevant to shopper X, right now."* Ba thông tin, ba
+hệ thống, ba mức tươi:
 
-| Fact | Where | Staleness |
+| Thông tin | Ở đâu | Độ cũ |
 |---|---|---|
-| Semantic relevance | `product_embeddings` (pgvector) | **hours** — embedding refresh schedule |
-| Purchase affinity, revenue rank | `iceberg.gold.*` | **minutes** — CDC + batch lag |
-| Is it purchasable? (stock, price) | MySQL/PostgreSQL live | **seconds** |
+| Liên quan ngữ nghĩa | `product_embeddings` (pgvector) | **hàng giờ**: lịch refresh embedding |
+| Sở thích mua, xếp hạng doanh thu | `iceberg.gold.*` | **vài phút**: độ trễ CDC + batch |
+| Có mua được không? (tồn kho, giá) | MySQL/PostgreSQL sống | **vài giây** |
 
-Fuse the first two with RRF and: **a product that sold out five minutes ago still ranks #1.**
-RRF's score depends only on rank position —
+Gộp hai cái đầu bằng RRF thì: **một sản phẩm đã hết hàng năm phút trước vẫn đứng #1.** Điểm RRF chỉ
+phụ thuộc vào vị trí,
 
 ```
 RRF(d) = SUM_i  1 / (k + rank_i(d))
 ```
 
-— so there is **no term for how old the data behind a ranking is**, and the fusion function
-cannot penalise a stale channel for being confidently wrong.
+nên **không có số hạng nào cho độ cũ của dữ liệu đằng sau một bảng xếp hạng**, và hàm fusion không thể
+phạt một kênh cũ vì đã tự tin sai.
 
-**Measured by:** *stale-hit rate@10* (primary) and *nDCG@10 vs an oracle* (secondary). The
-oracle is the ideal ranking computed directly against live OLTP at query time — fresh by
-construction. nDCG guards against a degenerate "suppress everything" fix.
+**Đo bằng:** *stale-hit rate@10* (chính) và *nDCG@10 vs oracle* (phụ). Oracle là bảng xếp hạng lý
+tưởng tính trực tiếp trên OLTP sống lúc query, nên tươi tuyệt đối theo định nghĩa. nDCG chống lại bản
+sửa suy biến kiểu "chặn hết mọi thứ".
 
 ---
 
 ## C2. N1 — the Freshness Registry
 
-**GR1 status:** does not exist. But **GR1 Eq. 5.1 cannot be evaluated without it.**
+**Trạng thái trong GR1:** không tồn tại. Nhưng **không có nó thì không tính được GR1 Eq. 5.1.**
 
-Equation 5.1 needs `last_cdc(d)` and `last_refresh(d)` — how old the data behind a specific
-item is. Today the pieces exist and are **never joined**: Iceberg exposes snapshots, Debezium
-exposes offsets, a catalog exposes lineage. Nothing answers *"how old is the data behind
-**this** answer?"*
+Phương trình 5.1 cần `last_cdc(d)` và `last_refresh(d)`, tức là dữ liệu đằng sau một item cụ thể cũ
+bao nhiêu. Hiện các mảnh có sẵn nhưng **chưa bao giờ được nối**: Iceberg có snapshot, Debezium có
+offset, catalog có lineage. Không cái nào trả lời *"dữ liệu đằng sau **câu trả lời này** cũ bao
+nhiêu?"*
 
-**What we build:** one queryable watermark plane spanning Iceberg tables, the vector index,
-and live sources — schema already deployed in
-[`sql/platform.sql`](../sql/platform.sql) and queryable from Trino as the `platform` catalog.
+**Ta xây:** một mặt phẳng watermark query được duy nhất, phủ bảng Iceberg, vector index và nguồn sống.
+Schema đã deploy trong [`sql/platform.sql`](../sql/platform.sql) và query được từ Trino qua catalog
+`platform`.
 
-Collectors, one per source of truth:
+Các collector, mỗi cái cho một nguồn sự thật:
 
-| Collector | Reads | Produces |
+| Collector | Đọc từ | Cho ra |
 |---|---|---|
-| CDC | Kafka Connect offsets + envelope `source.ts_ms` | how far behind each connector is |
-| Table | Iceberg snapshot summary (`max(_src_ts)` at commit) | how fresh each materialised relation is |
-| Vector | the index's declared `row_timestamp_column` | how fresh the embedding index is |
+| CDC | Kafka Connect offsets + `source.ts_ms` trong envelope | mỗi connector đang chậm bao xa |
+| Table | Iceberg snapshot summary (`max(_src_ts)` lúc commit) | mỗi bảng đã materialise tươi tới đâu |
+| Vector | `row_timestamp_column` khai báo của index | vector index tươi tới đâu |
 
-**A design decision worth defending:** per-entity watermarks are **not materialised** — that
-does not scale past a few million rows. Each dataset instead declares
-`platform.datasets.row_timestamp_column`, the column that *already* carries its per-row
-source time, and the channel query reads it inline. **Only dataset-level watermarks are
-stored.**
+**Một quyết định thiết kế đáng bảo vệ:** watermark theo từng entity **không được materialise**, vì
+cách đó không scale quá vài triệu dòng. Thay vào đó mỗi dataset khai báo
+`platform.datasets.row_timestamp_column`, là cột *đã* mang thời gian nguồn của từng dòng, và channel
+query đọc nó trực tiếp. **Chỉ watermark mức dataset được lưu.**
 
-**Built before N2 deliberately**, because the fusion engine is unevaluable without it.
+**Cố ý xây trước N2**, vì không có nó thì fusion engine không đánh giá được.
+
+*(Cập nhật M3: watermark của bảng do Trino ghi, tức Silver/Gold, phải đọc từ dữ liệu chứ không từ
+snapshot summary, xem C8 và STATUS finding 12.)*
 
 ---
 
 ## C3. N2 — the freshness-aware fusion engine
 
-**GR1 status:** §5.3 is explicitly *"a candidate research direction… not claimed as completed
-work within GR1."* It gives Eq. 5.1 (staleness) and Eq. 5.2 (freshness-weighted fusion) as a
-**framework**, with the decay `g(·)` and the weights α, β deliberately unspecified.
+**Trạng thái trong GR1:** §5.3 ghi rõ là *"a candidate research direction… not claimed as completed
+work within GR1."* Nó đưa ra Eq. 5.1 (staleness) và Eq. 5.2 (freshness-weighted fusion) như một
+**khung**, cố ý để trống dạng hàm decay `g(·)` và các trọng số α, β.
 
-**What we build:** the implementation and the measurement.
+**Ta xây:** phần implement và phần đo lường.
 
-| Policy | Behaviour |
+| Policy | Hành vi |
 |---|---|
-| `rrf` | the Cormack et al. (2009) baseline — rank position only, no freshness term |
-| `weighted` | fixed per-channel weights over normalised scores |
-| `freshness_weighted` | **GR1 Eq. 5.2** — per-channel score scaled by a decay `g(·)` of that channel's staleness. `g` stays pluggable (linear, exponential) because *determining its form is the experimental work*, not a settled result. |
+| `rrf` | baseline của Cormack et al. (2009): chỉ dựa vào vị trí, không có số hạng freshness |
+| `weighted` | trọng số cố định cho từng kênh trên điểm đã chuẩn hoá |
+| `freshness_weighted` | **GR1 Eq. 5.2**: điểm của mỗi kênh được nhân với hệ số decay `g(·)` theo độ cũ của kênh đó. `g` vẫn pluggable (tuyến tính, mũ) vì *xác định dạng của nó chính là phần việc thí nghiệm*, chưa phải kết quả đã chốt |
 
-Every result carries **provenance**: which channels contributed, rank within each, staleness
-observed, decay applied. That provenance is what makes the difference between policies
-legible in the five minutes an examiner gives a demo — and it is what experiment E4 reads
-back.
+Mọi kết quả đều mang **provenance** (nguồn gốc): kênh nào đóng góp, xếp hạng bao nhiêu trong từng kênh,
+độ cũ quan sát được, hệ số decay đã áp. Provenance làm cho khác biệt giữa các policy *đọc được* trong
+năm phút mà giám khảo dành cho một demo, và đó cũng là thứ thí nghiệm E4 đọc lại.
 
 ---
 
 ## C4. N3 — tag governance that reaches the vector index
 
-**GR1 opens this gap and does not close it.**
+**GR1 mở ra khoảng trống này nhưng không đóng nó lại.**
 
-§1.1 names the motivation explicitly: *"personally identifiable information can leak through
-embeddings that are not subject to the same masking and access-control policies as relational
-tables."*
+§1.1 nêu động lực rõ ràng: *"personally identifiable information can leak through embeddings that are
+not subject to the same masking and access-control policies as relational tables."* (PII có thể rò qua
+embedding, vốn không chịu cùng chính sách masking và phân quyền như bảng quan hệ.)
 
-But §4.6's two masking layers **both stop at the relational boundary** — Layer 1 masks Kafka
-records, Layer 2 masks Trino columns. **Neither touches the vector store.** The gap GR1
-identifies in its own motivation remains open in its own design.
+Nhưng hai lớp masking ở §4.6 **đều dừng ở ranh giới quan hệ**: Layer 1 mask record Kafka, Layer 2 mask
+cột Trino. **Không lớp nào chạm tới vector store.** Khoảng trống GR1 chỉ ra trong phần động lực vẫn mở
+trong chính thiết kế của nó.
 
-**What we build:**
+**Ta xây:**
 
-- **Tags, not column names.** A policy listing column names must be rewritten per domain,
-  which would make governance domain-specific and break the L3 claim. Policy is keyed on
-  tags (`sensitive`, `restricted`, `public`) attached to `(dataset, column)` pairs.
-- **Propagation.** Tags travel along `platform.column_lineage` edges, so a tag declared once
-  at the source survives every medallion hop without redeclaration.
-- **The guard.** Before an embedding job reads a text column, it asks whether that column
-  carries a restricting tag — directly or by propagation. If so, **the job refuses.**
+- **Tag, không phải tên cột.** Một policy liệt kê tên cột phải viết lại cho từng domain, khiến
+  governance phụ thuộc domain và phá claim L3. Policy được gắn vào tag (`sensitive`, `restricted`,
+  `public`) đặt trên các cặp `(dataset, column)`.
+- **Lan truyền.** Tag đi theo các cạnh `platform.column_lineage`, nên một tag khai báo một lần ở nguồn
+  sống sót qua mọi tầng medallion mà không phải khai báo lại.
+- **Chốt chặn.** Trước khi một embedding job đọc một cột text, nó hỏi cột đó có mang tag hạn chế không,
+  trực tiếp hay do lan truyền. Nếu có, **job từ chối chạy.**
 
-That turns *"PII cannot reach the vector index"* from a convention into an enforced property.
+Điều đó biến *"PII không thể vào vector index"* từ một quy ước thành một thuộc tính được cưỡng chế.
 
 ---
 
 ## C5. N4 — freshness-SLA query routing *(stretch)*
 
-Not in GR1. A natural consequence of N1: a request declaring a **tighter freshness SLA** than
-the lake watermark can be **routed to the live source** instead of Gold. Makes the freshness
-plane *actionable* rather than merely observable. Explicitly a stretch item.
+Không có trong GR1. Là hệ quả tự nhiên của N1: một request khai báo **freshness SLA chặt hơn**
+watermark của lakehouse có thể được **định tuyến tới nguồn sống** thay vì Gold. Nó làm mặt phẳng
+freshness trở nên *hành động được* chứ không chỉ quan sát được. Đây rõ ràng là mục stretch (làm nếu
+còn thời gian).
 
 ---
 
 ## C6. A second domain as mechanical proof of genericity
 
-**GR1 status:** absent. GR1 asserts MOSAIC is a platform; it offers no way to check.
+**Trạng thái trong GR1:** không có. GR1 khẳng định MOSAIC là một platform nhưng không đưa ra cách nào
+để kiểm.
 
-**What we add:** `domains/jobmarket/` — postings and candidates — running on the **identical
-binaries**. Adding it means adding source DDL and one `retrieval.yaml`. Nothing else.
+**Ta thêm:** `domains/jobmarket/` (tin tuyển dụng và ứng viên), chạy trên **đúng các binary đó**. Thêm
+nó chỉ cần thêm DDL nguồn và một `retrieval.yaml`, không gì khác.
 
-It has the same *shape* and none of the same *words*: a job description is the slow semantic
-channel; "still open", headcount, salary revision are the fast transactional facts. The
-failure is the same failure and just as intuitive — recommending a role filled an hour ago.
+Nó có cùng *hình dạng* và không dùng chung *từ* nào: mô tả công việc là kênh ngữ nghĩa chậm; "còn
+tuyển", số lượng tuyển, điều chỉnh lương là các thông tin giao dịch nhanh. Lỗi là cùng một lỗi và dễ
+hình dung như vậy: gợi ý một vị trí đã tuyển xong một giờ trước.
 
-**Two mechanical tests decide whether the abstraction is real:**
+**Hai phép thử máy móc quyết định sự trừu tượng có thật hay không:**
 
 ```bash
-python mosaic.py check-abstraction          # no domain vocabulary in platform/
+python mosaic.py check-abstraction          # không có từ vựng domain trong platform/
 python mosaic.py test-domain --domain jobmarket
 ```
 
-If both pass, *"is this a platform or a tool?"* stops being a claim about intent and becomes
-**an observation about behaviour**. That is the single highest-value addition relative to
-GR1.
+Nếu cả hai pass, câu *"đây là platform hay tool?"* không còn là claim về ý định mà trở thành **một quan
+sát về hành vi**. Đây là phần bổ sung có giá trị cao nhất so với GR1.
 
 ---
 
 ## C7. The `platform/` ÷ `domains/` split, enforced
 
-The abstraction is made **structural and greppable**, not just documented. `platform/` is the
-generic core; anything that knows what a product is lives under `domains/`.
+Sự trừu tượng được làm thành thứ **có cấu trúc và grep được**, không chỉ được ghi trong tài liệu.
+`platform/` là lõi chung; bất cứ thứ gì biết product là gì đều nằm dưới `domains/`.
 
-Enforced by a CI gate that scans `platform/` for 12 domain terms across **both** domains — the
-core must not know about either:
+Được cưỡng chế bởi một cổng CI quét `platform/` tìm 12 từ thuộc **cả hai** domain, vì lõi không được
+biết về domain nào:
 
 ```
 $ python mosaic.py check-abstraction
@@ -1070,159 +1083,157 @@ scanned 6 files under platform/ for 12 domain terms
 PASS -- the generic core contains no domain vocabulary.
 ```
 
-Domain knowledge reaches the core **only as data**: a parsed `retrieval.yaml`, a row in
-`platform.datasets`, a tag in `platform.column_tags`. Identifiers arriving at runtime are
-opaque strings.
+Tri thức domain đi vào lõi **chỉ dưới dạng dữ liệu**: một `retrieval.yaml` đã parse, một dòng trong
+`platform.datasets`, một tag trong `platform.column_tags`. Định danh đến lúc runtime là những chuỗi mờ
+(*opaque strings*): lõi xử lý chúng mà không cần hiểu nghĩa.
 
 ---
 
 ## C8. The `_src_ts` / `_ingest_ts` convention
 
-**Not in GR1.** Every Silver and Gold row carries `_src_ts` (source commit time) and
-`_ingest_ts`, and every Iceberg commit records `max(_src_ts)` in its snapshot summary.
+**Không có trong GR1.** Mọi dòng Silver và Gold mang `_src_ts` (thời điểm commit ở nguồn) và
+`_ingest_ts`, và mọi Iceberg commit ghi `max(_src_ts)` vào snapshot summary của nó.
 
-**Why it is a hard rule:** N1 is **impossible to retrofit** if a pipeline skips it. There is
-no way to recover, after the fact, what the source-commit time of an already-written row was.
-This lands in M3 for that reason.
+**Vì sao là quy tắc cứng:** N1 **không thể bổ sung về sau** nếu một pipeline bỏ qua quy ước này. Không
+có cách nào khôi phục, sau khi đã ghi, thời điểm commit nguồn của một dòng. Vì vậy nó được làm ngay ở
+M3.
 
-**Status (M3).** Bronze: every row carries `_src_ts` (envelope `source.ts_ms`) and `_ingest_ts`
-(one literal per micro-batch), and every commit stamps `mosaic.max_src_ts[_ms]` -- overall and
-per topic -- plus `mosaic.ingest_ts_us` into the Iceberg snapshot summary; the last joins each
-row to the snapshot that published it, which is how the end-to-end latency KPI is measured.
-Silver and Gold: every row carries both columns, defined as those of the **newest contributing
-change** (not-null enforced by dbt tests). The snapshot-summary half **cannot** hold for
-Silver/Gold: Trino has no way to write custom summary properties (STATUS finding 12), so N1
-will read Trino-written tables' watermarks from the data instead.
+**Status (M3).** Bronze: mọi dòng mang `_src_ts` (`source.ts_ms` trong envelope) và `_ingest_ts` (một
+hằng số mỗi micro-batch), và mọi commit đóng dấu `mosaic.max_src_ts[_ms]` (tổng thể và theo từng topic)
+cùng `mosaic.ingest_ts_us` vào Iceberg snapshot summary. Cái sau nối mỗi dòng với snapshot đã publish
+nó, và đó là cách đo KPI latency end-to-end. Silver và Gold: mọi dòng mang cả hai cột, định nghĩa là
+của **thay đổi đóng góp mới nhất** (not-null được dbt test cưỡng chế). Nửa snapshot-summary thì
+**không** áp được cho Silver/Gold: Trino không có cách ghi thuộc tính summary tuỳ biến (STATUS finding
+12), nên N1 sẽ đọc watermark của các bảng do Trino ghi từ chính dữ liệu.
 
 ---
 
 ## C9. Seed and load generators as first-class deliverables
 
-**GR1 §10.1** mentions *"Faker + TPC-H patterns"* and a 10M-row target in one line. Two
-things needed more thought than that:
+**GR1 §10.1** nhắc *"Faker + TPC-H patterns"* và mục tiêu 10M dòng trong đúng một dòng. Hai việc cần
+nghĩ kỹ hơn thế:
 
-**The corpus must be semantically real.** Descriptions are **compositional over a
-category-scoped vocabulary**, not fake text. With lorem ipsum, embeddings carry no structure,
-the ANN channel becomes noise, and the whole freshness argument collapses because **there is
-nothing sensible for the stale channel to be confidently wrong about.** Verified: *"waterproof
-hiking backpack"* retrieves dry bags, camp stoves and trekking poles — nothing from Kitchen.
+**Corpus phải có ngữ nghĩa thật.** Mô tả được **ghép từ bộ từ vựng theo từng category**, không phải
+text giả. Với lorem ipsum, embedding không mang cấu trúc gì, kênh ANN thành nhiễu, và cả lập luận về
+freshness sụp đổ, vì **không có gì hợp lý để kênh cũ tự tin sai về nó.** Đã kiểm: *"waterproof hiking
+backpack"* trả về dry bag, bếp cắm trại và gậy trekking, không có gì từ nhóm Kitchen.
 
-Name, description and leaf category are generated **together**, because drawing them
-independently produced items like *"Minimalist Kettle"* described as a stock pot — the console
-shows the name while ranking uses the description embedding, so correct retrieval would have
-*looked* broken.
+Tên, mô tả và category lá được sinh **cùng nhau**, vì sinh độc lập từng tạo ra những item như
+*"Minimalist Kettle"* được mô tả là nồi. Console hiển thị tên, còn xếp hạng dùng embedding của mô tả,
+nên truy hồi đúng lại *trông như* sai.
 
-**Reproducibility is a requirement, not a nicety.** Generation is deterministic given
-`(scale, seed, now)`, all recorded in `manifest.json`. E3/E4 must re-run against an identical
-corpus. An early version read the wall clock at module level, so the same seed produced
-different timestamps every run — caught by a byte-comparison check that now guards it.
+**Tính tái lập là yêu cầu, không phải tiện ích.** Việc sinh là tất định với `(scale, seed, now)`, đều
+ghi trong `manifest.json`. E3/E4 phải chạy lại trên một corpus giống hệt. Một phiên bản đầu đọc giờ hệ
+thống ở cấp module, nên cùng seed cho ra timestamp khác nhau mỗi lần chạy. Lỗi này được bắt bởi một
+phép so sánh từng byte, và phép so sánh đó giờ vẫn canh.
 
-**The load generator** (`tools/loadgen/`, built in M1) drives continuous OLTP writes plus the
-**stock-out injection lever**. It is what *manufactures* the freshness asymmetry the entire
-thesis measures, so it is a deliverable, not a test fixture.
+**Load generator** (`tools/loadgen/`, xây ở M1) tạo ra các lần ghi OLTP liên tục cộng **công tắc tiêm
+lỗi hết hàng**. Nó là thứ *tạo ra* sự bất đối xứng freshness mà cả luận văn đo, nên nó là một
+deliverable chứ không phải test fixture.
 
-Three things it had to get right, each of which was wrong first:
+Ba điều nó phải làm đúng, và cả ba đều từng sai trước:
 
-*Replenishment is triggered by a low level and has a lead time.* The first version topped up
-whichever product was popular, regardless of level. Since demand removes 1-3 units and a
-replenishment adds 20-200, stock on the head of the catalogue inflated without bound — 2,664
-units against a 500-unit seed — and **nothing could ever sell out organically**, which is the
-one behaviour the corpus exists to produce. The second version replenished anything low
-*immediately*, and erased the seed's deliberately-empty slice within a minute. Real
-replenishment waits: a product that sells out stays out for `RESTOCK_LEAD_SECONDS`, and **that
-interval is precisely the window in which a stale ranking is confidently wrong.**
+*Nhập kho được kích hoạt bởi mức thấp và có thời gian chờ.* Phiên bản đầu nhập cho bất kỳ sản phẩm nào
+bán chạy, bất kể còn bao nhiêu. Vì nhu cầu chỉ lấy đi 1–3 đơn vị còn một lần nhập thêm 20–200, tồn kho
+ở đầu catalogue phình không giới hạn (2,664 đơn vị so với seed 500), và **không gì có thể hết hàng một
+cách tự nhiên**, mà đó lại là hành vi duy nhất corpus tồn tại để tạo ra. Phiên bản thứ hai nhập ngay
+mọi thứ đang thấp, và xoá sạch phần cố ý để trống của seed trong một phút. Nhập kho thật thì phải chờ:
+một sản phẩm hết hàng sẽ hết trong `RESTOCK_LEAD_SECONDS`, và **khoảng đó chính là cửa sổ mà một bảng
+xếp hạng cũ tự tin sai.**
 
-*The reported throughput has to be a rate the source sustained, not a rate Python emitted.*
-Statements are written into a pipe, so an unthrottled generator reports whatever the sender
-managed. One run reported 549 ops/s while MySQL was still committing that work **152 seconds
-later**, and an earlier run silently lost 5,327 orders when the client was killed mid-drain.
-The generator now measures committed rows on a separate connection, throttles against that,
-and prints *sent* and *sustained* rates separately. Measured on this machine: **~100 ops/s
-sustained**, bounded by per-commit fsync under Docker Desktop.
+*Throughput được báo phải là tốc độ nguồn duy trì được, không phải tốc độ Python phát ra.* Các câu lệnh
+được ghi vào một pipe, nên một generator không throttle sẽ báo bất cứ tốc độ nào bên gửi đạt được. Một
+lần chạy báo 549 ops/s trong khi MySQL vẫn đang commit phần việc đó **152 giây sau**, và một lần trước
+đó âm thầm mất 5,327 orders khi client bị kill lúc đang xả. Generator giờ đo số dòng đã commit trên một
+connection riêng, throttle theo con số đó, và in riêng tốc độ *sent* và *sustained*. Đo trên máy này:
+**khoảng 100 ops/s sustained**, bị giới hạn bởi fsync mỗi commit dưới Docker Desktop.
 
-*Effects are read back, never assumed.* Every run ends by re-counting rows in both engines and
-comparing against what it sent. That check is what caught both defects above; without it the
-run reported success twice.
+*Hiệu ứng được đọc lại, không bao giờ giả định.* Mỗi lần chạy kết thúc bằng việc đếm lại số dòng ở cả
+hai engine và so với số đã gửi. Chính phép kiểm này đã bắt được cả hai lỗi trên; không có nó thì lần
+chạy đã báo thành công hai lần.
 
-*Nothing in the mix touches `products.name` or `products.description`.* The semantic channel's
-inputs are held still on purpose, so a stale hit can be attributed to the freshness asymmetry
-alone rather than to the text having changed underneath the embedding.
+*Không gì trong hỗn hợp tải chạm vào `products.name` hay `products.description`.* Đầu vào của kênh ngữ
+nghĩa được cố ý giữ yên, để một stale hit chỉ có thể quy cho sự bất đối xứng freshness, chứ không phải
+do text đã thay đổi dưới chân embedding.
 
 ---
 
-# Part D — Operational changes
+# Part D — Operational changes (thay đổi vận hành)
 
-Mechanical. No effect on the architecture's claims, but they are why the stack runs.
+Mang tính cơ học, không ảnh hưởng claim của kiến trúc, nhưng là lý do stack chạy được.
 
-| # | Change | Reason |
+| # | Thay đổi | Lý do |
 |---|---|---|
-| **D1** | `mosaic.py` task runner instead of `make` | `make` is not installed on this machine. Standard-library Python only, so it works identically on Windows/macOS/Linux. A Makefile delegates to it where make exists. |
-| **D2** | `up` waits for **healthy**, not merely **started** | `compose up -d` returns as soon as containers *start*. Kafka Connect accepts TCP connections long before it will accept a connector. Everything downstream depends on the difference. |
-| **D3** | Compose profiles — `core` / `gov` / `orch` / `console` | Appendix B's full stack does not comfortably fit one machine. The default profile is the vertical slice; governance, orchestration and the demo UI are opt-in. |
-| **D4** | All published host ports parameterised via `docker/.env` | Port 9001 on this machine is held by an unrelated `lakehouse-control-plane` container. MinIO's console moves to 9101. **Container-internal ports never change**, so nothing architectural is affected. |
-| **D5** | Platform metadata in its own `mosaic_platform` database, plus a 4th Trino catalog `platform` | Keeps N1's state out of the domain database — which is a **CDC source**, so platform tables there would be captured by `mosaic_pub` and pollute the change stream. The extra catalog lets a watermark be joined against the data it describes **inside one Trino query**. |
-| **D6** | Domain DDL and connector configs under `domains/<domain>/`, not top-level `sql/` and `connectors/` | Keeps *"adding a domain touches only `domains/`"* **literally true** — which is what the L3 proof (C6) rests on. |
-| **D7** | Explicit `decimal.handling.mode=string`, `time.precision.mode=connect` | Debezium's default for `DECIMAL` is `precise`, which emits base64-encoded bytes — unusable downstream without special handling. `string` keeps `DECIMAL(12,2)` exact and readable; Silver casts back. `connect` avoids microsecond-int representations Iceberg cannot map directly. Not specified in GR1. |
-| **D8** | No `ExtractNewRecordState` at the connector | Consequence of A1 — Bronze keeps the full envelope; flattening moves to Bronze→Silver. |
-| **D9** | MySQL bulk load runs as `root`, not `cdc` | Server-side `LOAD DATA INFILE` needs the **global `FILE` privilege**. `cdc` deliberately holds only GR1 Appendix A's least-privilege replication grants. Granting `FILE` to the replication account to make a one-off seed work would undermine the very thing that appendix is careful about. **Seeding is an operator action, so it uses the operator account.** |
-| **D11** | Silver is **generated**, one model per captured table, by `pipelines/transform/assemble.py`; Gold is hand-written in `domains/<domain>/gold/` and copied in | Silver's job (dedup, type, latest-wins) depends only on a table's key, columns and Debezium's encodings -- all derivable from the connector config and the live catalog. Hand-written, seven near-identical models would put domain vocabulary into `pipelines/` and make the second domain edit it. Generated, **adding a domain still touches only `domains/`** (C6). A domain is now five things: `ddl/`, `connectors/`, `gold/`, `retrieval.yaml`, `tags.yaml`. |
-| **D12** | Silver = one **unpartitioned current-state table** per captured table, latest-wins by source position, soft deletes (`_is_deleted`) | GR1 §4.3 says Silver is *"partitioned by source system and date to simplify replay"*. Source system is implicit in a per-table layout, and replay is Bronze's job here (A10). A date partition on a table updated in place moves every updated row between partitions on each MERGE. **Open to revisit** if a Silver consumer needs pruning. |
-| **D13** | dbt runs in its own image (`dbt-core 1.8.8`, `dbt-trino 1.8.3`), behind compose profile `transform`, via `python mosaic.py dbt` | The host interpreter (3.14) is newer than dbt-core supports, and a pinned image makes every build resolve the same dbt. A one-shot job, so `up` never waits on it. |
-| **D14** | Trino `iceberg.max-partitions-per-writer=5000` (default 100) | Required to run GR1 §4.3's `gold.orders` partition spec at all (A12). |
-| **D15** | `tools/loadgen` draws regions from `tools/seed/vocab.py` | The two generators had separate region vocabularies (cities vs. `north`/`central`/...), so every per-region aggregate split in two -- visible only once Gold grouped by region. Fixed going forward; rows already written keep their values. |
+| **D1** | Task runner `mosaic.py` thay `make` | Máy không cài `make`. Chỉ dùng thư viện chuẩn Python nên chạy giống nhau trên Windows/macOS/Linux. Makefile uỷ quyền cho nó ở nơi có make. |
+| **D2** | `up` đợi **healthy**, không chỉ **started** | `compose up -d` trả về ngay khi container *khởi động*. Kafka Connect nhận kết nối TCP từ rất lâu trước khi nhận connector. Mọi thứ phía sau phụ thuộc vào khác biệt đó. |
+| **D3** | Compose profile: `core` / `gov` / `orch` / `console` | Stack đầy đủ của Appendix B không vừa thoải mái trên một máy. Profile mặc định là lát cắt dọc tối thiểu; governance, orchestration và giao diện demo là tuỳ chọn. |
+| **D4** | Mọi port publish ra host được tham số hoá qua `docker/.env` | Cổng 9001 trên máy này bị một container `lakehouse-control-plane` không liên quan chiếm. Console MinIO chuyển sang 9101. **Port bên trong container không bao giờ đổi**, nên không có gì về kiến trúc bị ảnh hưởng. |
+| **D5** | Metadata của platform nằm trong DB riêng `mosaic_platform`, cộng catalog Trino thứ 4 `platform` | Giữ trạng thái của N1 ngoài DB domain, vì DB domain là **nguồn CDC**: bảng platform đặt ở đó sẽ bị `mosaic_pub` capture và làm bẩn luồng thay đổi. Catalog thêm cho phép join một watermark với chính dữ liệu nó mô tả **trong một câu query Trino**. |
+| **D6** | DDL domain và cấu hình connector đặt dưới `domains/<domain>/`, không ở `sql/` và `connectors/` cấp ngoài | Giữ câu *"thêm một domain chỉ chạm vào `domains/`"* **đúng theo nghĩa đen**, đó là thứ chứng minh L3 (C6) dựa vào. |
+| **D7** | Đặt rõ `decimal.handling.mode=string`, `time.precision.mode=connect` | Mặc định của Debezium cho `DECIMAL` là `precise`, phát ra bytes mã hoá base64, không dùng được ở downstream nếu không xử lý đặc biệt. `string` giữ `DECIMAL(12,2)` chính xác và đọc được; Silver cast ngược lại. `connect` tránh các biểu diễn số nguyên microsecond mà Iceberg không ánh xạ trực tiếp được. GR1 không đặc tả. |
+| **D8** | Không dùng `ExtractNewRecordState` ở connector | Hệ quả của A1: Bronze giữ envelope đầy đủ; việc làm phẳng chuyển sang Bronze→Silver. |
+| **D9** | Bulk load MySQL chạy bằng `root`, không bằng `cdc` | `LOAD DATA INFILE` phía server cần **quyền global `FILE`**. `cdc` cố ý chỉ giữ các quyền replication tối thiểu của GR1 Appendix A. Cấp `FILE` cho tài khoản replication chỉ để một lần seed chạy được sẽ phá chính điều phụ lục đó cẩn thận giữ gìn. **Seed là một thao tác của người vận hành, nên dùng tài khoản người vận hành.** |
+| **D10** | `REPLICA IDENTITY FULL` trên `users`, `products`, `inventory` | Bản sửa cho A6: không có nó thì PostgreSQL không phát before image. Chỉ áp cho ba bảng vì `FULL` làm WAL tăng theo độ rộng dòng. **Không áp hồi tố** cho volume đã tồn tại; với database đang chạy phải `ALTER` bằng tay. *(Dòng này thiếu trong bảng của bản gốc dù có trong Summary; đã bổ sung.)* |
+| **D11** | Silver được **sinh tự động**, mỗi bảng capture một model, bởi `pipelines/transform/assemble.py`; Gold viết tay trong `domains/<domain>/gold/` rồi được chép vào | Việc của Silver (khử trùng, ép kiểu, latest-wins) chỉ phụ thuộc vào khoá, các cột và cách mã hoá của Debezium cho mỗi bảng, đều suy ra được từ cấu hình connector và catalog sống. Viết tay bảy model gần giống hệt nhau sẽ đưa từ vựng domain vào `pipelines/` và buộc domain thứ hai phải sửa nó. Sinh tự động thì **thêm domain vẫn chỉ chạm vào `domains/`** (C6). Một domain giờ là năm thứ: `ddl/`, `connectors/`, `gold/`, `retrieval.yaml`, `tags.yaml`. |
+| **D12** | Silver = một **bảng trạng thái hiện tại không phân vùng** cho mỗi bảng capture, latest-wins theo vị trí nguồn, soft delete (`_is_deleted`) | GR1 §4.3 nói Silver *"partitioned by source system and date to simplify replay"*. Source system đã ngầm định trong bố cục mỗi bảng một Silver, và replay ở đây là việc của Bronze (A10). Phân vùng theo ngày trên một bảng được update tại chỗ sẽ khiến mỗi dòng được update phải chuyển phân vùng ở mỗi lần MERGE. **Có thể xem lại** nếu một consumer của Silver cần pruning. |
+| **D13** | dbt chạy trong image riêng (`dbt-core 1.8.8`, `dbt-trino 1.8.3`), sau compose profile `transform`, qua `python mosaic.py dbt` | Python trên host (3.14) mới hơn mức dbt-core hỗ trợ, và một image đã pin khiến mọi lần build dùng cùng một dbt. Là job chạy một lần nên `up` không bao giờ đợi nó. |
+| **D14** | Trino `iceberg.max-partitions-per-writer=5000` (mặc định 100) | Bắt buộc để chạy được partition spec `gold.orders` của GR1 §4.3 (A12). |
+| **D15** | `tools/loadgen` lấy region từ `tools/seed/vocab.py` | Hai generator dùng hai bộ từ vựng region riêng (tên thành phố vs. `north`/`central`/…), nên mọi số tổng hợp theo region bị tách đôi, chỉ thấy được khi Gold group theo region. Đã sửa từ nay về sau; các dòng đã ghi giữ giá trị cũ. |
 
 ### A debugging note worth keeping (D9)
 
-MySQL reports a missing `FILE` privilege as:
+MySQL báo thiếu quyền `FILE` như sau:
 
 ```
 ERROR 1045 (28000): Access denied for user 'cdc'@'%' (using password: YES)
 ```
 
-That reads **exactly** like a wrong password. It is not. Three separate connection paths
-authenticated fine; only the `LOAD DATA INFILE` statement failed. Cost one debugging cycle —
-worth a footnote if you write about operational lessons.
+Đọc vào thì **y hệt** sai mật khẩu, nhưng không phải. Ba đường kết nối khác đều xác thực bình thường;
+chỉ câu `LOAD DATA INFILE` lỗi. Tốn một vòng debug, đáng một chú thích nếu viết về bài học vận hành.
 
 ---
 
-# Part E — What did **not** change
+# Part E — What did **not** change (những gì KHÔNG đổi)
 
-Bounding the delta matters: it shows the GR1 design largely survived contact with reality.
+Khoanh vùng phần thay đổi là quan trọng: nó cho thấy thiết kế GR1 phần lớn vẫn đứng vững khi gặp thực
+tế.
 
-| Area | Status |
+| Phạm vi | Trạng thái |
 |---|---|
-| **Six-layer layered lakehouse architecture** (§4.1) | Unchanged |
-| **Sources**: MySQL 8.0 (binlog) + PostgreSQL 15 (WAL), PostgreSQL dual-role with pgvector | Unchanged |
-| **Data model** (Appendix A) | Unchanged, DDL used verbatim |
-| **MySQL CDC prerequisites** — `binlog_format=ROW`, `binlog_row_image=FULL`, GTID | Unchanged, verified live |
-| **PostgreSQL CDC prerequisites** — `wal_level=logical`, `mosaic_pub`, replication slot | Unchanged, verified live |
-| **WAL-accumulation guard** — heartbeat + `confirmed_flush_lsn` monitoring (§4.4) | Unchanged |
-| **Kafka 3.7 KRaft**, no ZooKeeper | Unchanged |
-| **Iceberg on MinIO**, Nessie catalog | Unchanged (registry corrected, A4) |
-| **Medallion Bronze/Silver/Gold semantics** (§4.2) | Unchanged |
-| **Partitioning strategy** (§4.3) | Gold: implemented as written (but see A12, F3); Silver: see D12 |
-| **Trino 451** as federation layer, `ANALYZE` workflow (§4.5) | Unchanged |
-| **pgvector HNSW**, `m=16, ef_construction=64` (§3.4) | Unchanged |
-| **Two-track top-*k* taxonomy** (§5.2) | Unchanged — adopted as the experiment structure |
-| **Five CDC KPIs** (Table 4.4) | Unchanged |
-| **Table 4.6 role hierarchy** | Unchanged in content; enforcement engine differs (B1) |
-| **Table 4.5 two-layer masking model** | Unchanged in substance; mechanism differs (A1) |
-| **Deferred components** — MongoDB, Milvus, Prometheus/Grafana | Still deferred, per GR1's own scope decision |
+| **Kiến trúc lakehouse sáu tầng** (§4.1) | Không đổi |
+| **Nguồn**: MySQL 8.0 (binlog) + PostgreSQL 15 (WAL), PostgreSQL kiêm hai vai trò với pgvector | Không đổi |
+| **Mô hình dữ liệu** (Appendix A) | Không đổi, DDL dùng nguyên văn |
+| **Điều kiện CDC của MySQL**: `binlog_format=ROW`, `binlog_row_image=FULL`, GTID | Không đổi, đã kiểm trên hệ thống sống |
+| **Điều kiện CDC của PostgreSQL**: `wal_level=logical`, `mosaic_pub`, replication slot | Không đổi, đã kiểm trên hệ thống sống |
+| **WAL-accumulation guard**: heartbeat + theo dõi `confirmed_flush_lsn` (§4.4) | Cơ chế không đổi; cấu hình phải sửa để nó có tác dụng (A9) |
+| **Kafka 3.7 KRaft**, không ZooKeeper | Không đổi |
+| **Iceberg trên MinIO**, catalog Nessie | Không đổi (sửa registry, A4) |
+| **Ngữ nghĩa medallion Bronze/Silver/Gold** (§4.2) | Không đổi |
+| **Chiến lược phân vùng** (§4.3) | Gold: implement như viết (nhưng xem A12, F3); Silver: xem D12 |
+| **Trino 451** làm tầng federation, quy trình `ANALYZE` (§4.5) | Không đổi |
+| **pgvector HNSW**, `m=16, ef_construction=64` (§3.4) | Không đổi |
+| **Phân loại top-*k* hai nhánh** (§5.2) | Không đổi, được dùng làm cấu trúc thí nghiệm |
+| **Năm KPI CDC** (Table 4.4) | Không đổi |
+| **Phân cấp role Table 4.6** | Nội dung không đổi; engine cưỡng chế khác (B1) |
+| **Mô hình masking hai lớp Table 4.5** | Bản chất không đổi; cơ chế khác (A1) |
+| **Các thành phần hoãn lại**: MongoDB, Milvus, Prometheus/Grafana | Vẫn hoãn, theo quyết định phạm vi của chính GR1 |
 
 ---
 
-# Part F — Defects inside the GR1 report itself
+# Part F — Defects inside the GR1 report itself (lỗi trong chính báo cáo GR1)
 
-These are problems **in the document**, independent of implementation. Fix them in the report
-before submitting GR2 — an examiner will notice.
+Đây là lỗi **trong văn bản**, độc lập với việc implement. Sửa chúng trong báo cáo trước khi nộp GR2,
+vì giám khảo sẽ nhận ra.
 
 ## F1. Eight broken cross-references to a section that does not exist
 
-The report refers **eight times** to a scope-decision record and renders each one as a
-literal `??`, because the LaTeX `
-ef` points at a label that was never defined:
+*(Tám tham chiếu chéo trỏ vào một mục không tồn tại)*
 
-| PDF page | Context |
+Báo cáo **tám lần** nhắc tới một bản ghi quyết định phạm vi (*scope-decision record*), và mỗi lần đều
+hiện ra là `??` theo nghĩa đen, vì lệnh `\ref` của LaTeX trỏ vào một label chưa bao giờ được định
+nghĩa:
+
+| Trang PDF | Ngữ cảnh |
 |---|---|
 | **p9** | *"…rationale behind it, is documented in full in Section **??**."* (§1.2) |
 | **p13** | *"…the scope decisions recorded in Section **??** to defer components safely…"* (§2.3) |
@@ -1233,134 +1244,135 @@ ef` points at a label that was never defined:
 | **p34** | *"…the components deferred to GR2 in Table **??**…"* (§6.2) |
 | **p41** | *"…the complete GR1 minimum viable core described in Section **??**…"* (Appendix B) |
 
-**The section is not in the report.** Chapter 4 contains §4.1 through §4.6 only — confirmed
-from the table of contents on p3–p4 and from the body. There is no §4.7.
+**Mục đó không có trong báo cáo.** Chương 4 chỉ có §4.1 tới §4.6, đã xác nhận từ mục lục trang 3–4 và
+từ nội dung. Không có §4.7.
 
-**This is not a conversion artifact.** The `??` markers are present in the compiled PDF
-itself, so this is exactly what an examiner reads on the page.
+**Đây không phải lỗi do chuyển đổi.** Dấu `??` có ngay trong PDF đã biên dịch, tức đúng là thứ giám
+khảo đọc trên trang giấy.
 
-This is not cosmetic. That record is claimed as a **core deliverable**:
+Đây không phải chuyện hình thức. Bản ghi đó được claim là một **deliverable cốt lõi**:
 
-- The **abstract** lists *"an explicit scope-decision record that separates the confirmed
-  minimum viable core from components deferred to later phases"* as a contribution.
-- **§1.2** promises it is *"documented in full in Section ??"*.
-- **§6.1** calls it the *"principal lesson"* of the design phase.
-- **Appendix B** describes itself as deploying *"the complete GR1 minimum viable core
-  described in Section ??"*.
+- **Abstract** liệt kê *"an explicit scope-decision record that separates the confirmed minimum viable
+  core from components deferred to later phases"* như một đóng góp.
+- **§1.2** hứa nó *"documented in full in Section ??"*.
+- **§6.1** gọi nó là *"principal lesson"* của giai đoạn thiết kế.
+- **Appendix B** tự mô tả là deploy *"the complete GR1 minimum viable core described in Section ??"*.
 
-So the report repeatedly cites, as one of its three main deliverables, a section it does not
-contain. **Highest-priority fix.** The content exists — the MVP/Extended split is in
-`UDP_BaoCaoNghienCuu_v3_Enhanced.md` §1.3, and the deferral rationale is scattered through
-§3.4, §3.5 and Appendix B's comments. It needs to be written up as an actual section.
+Vậy là báo cáo nhiều lần trích dẫn, như một trong ba deliverable chính, một mục mà nó không chứa.
+**Ưu tiên sửa cao nhất.** Nội dung thì có sẵn: phần chia MVP/Extended nằm ở
+`UDP_BaoCaoNghienCuu_v3_Enhanced.md` §1.3, và lý do hoãn rải rác ở §3.4, §3.5 và các comment trong
+Appendix B. Cần viết nó thành một mục thật sự.
 
 ## F2. "Four data sources", but Table 4.2 lists three
 
-**§4.3, PDF p22** says *"Table 4.2 lists the **four** data sources that compose this
-domain"*. The table immediately below it (also p22) has **three** rows: MySQL, PostgreSQL,
-and Derived (pgvector).
+*("Bốn nguồn dữ liệu", nhưng Table 4.2 chỉ có ba)*
 
-Probably a leftover from the earlier scope, where MongoDB was a source (it is four in
-`UDP_BaoCaoNghienCuu_v3_Enhanced.md` §10.1, which lists MongoDB and Kafka producers too).
-Fix the number, or restore the row and mark it deferred.
+**§4.3, PDF trang 22** viết *"Table 4.2 lists the **four** data sources that compose this domain"*.
+Bảng ngay bên dưới (cũng trang 22) có **ba** dòng: MySQL, PostgreSQL, và Derived (pgvector).
+
+Có lẽ là phần sót lại từ phạm vi cũ, khi MongoDB còn là một nguồn (ở
+`UDP_BaoCaoNghienCuu_v3_Enhanced.md` §10.1 là bốn, có liệt kê cả MongoDB và Kafka producer). Sửa con
+số, hoặc thêm lại dòng đó và đánh dấu là hoãn.
 
 ## F3. `users` is partitioned by a column it does not have
 
-**§4.3, PDF p23** says *"users are partitioned by `bucket(32, user_id)`"*.
+*(`users` được phân vùng theo một cột nó không có)*
 
-But **Appendix A.2** defines `users` with `id BIGSERIAL PRIMARY KEY` — **there is no
-`user_id` column on `users`.** `user_id` is the foreign key *on `orders`*, pointing at
-`users.id`.
+**§4.3, PDF trang 23** viết *"users are partitioned by `bucket(32, user_id)`"*.
 
-Correct form is `bucket(32, id)`, or rename the column in the DDL for consistency. This will
-surface for real in M3 when the Gold partitioning is actually applied.
+Nhưng **Appendix A.2** định nghĩa `users` với `id BIGSERIAL PRIMARY KEY`. **Bảng `users` không có cột
+`user_id`.** `user_id` là foreign key *trên `orders`*, trỏ tới `users.id`.
 
-**Resolved in M3** without touching Appendix A's DDL: `gold.users` exposes the key as
-`user_id` (`u.id AS user_id`) and is partitioned `bucket(user_id, 32)`, which is what §4.3's
-sentence -- and every join from `orders` -- already assumes. The report text can then stay;
-only a footnote that Gold renames the key is needed.
+Dạng đúng là `bucket(32, id)`, hoặc đổi tên cột trong DDL cho nhất quán.
+
+**Đã giải quyết ở M3** mà không động tới DDL của Appendix A: `gold.users` đặt khoá thành `user_id`
+(`u.id AS user_id`) và phân vùng `bucket(user_id, 32)`, đúng điều câu văn của §4.3 (và mọi phép join
+từ `orders`) đã ngầm giả định. Văn bản báo cáo có thể giữ nguyên; chỉ cần một chú thích rằng Gold đổi
+tên khoá.
 
 ## F4. Figure 4.1 shows deferred components as if in scope
 
-Figure 4.1 (PDF **p20**) shows a source layer of **MySQL, PostgreSQL, MongoDB 6.0, and application logs**, and
-the storage layer shows **Milvus 2.4** alongside pgvector. The governance layer shows
-**observability (Prometheus/Grafana)**.
+*(Hình 4.1 vẽ các thành phần đã hoãn như thể nằm trong phạm vi)*
 
-All three — MongoDB, Milvus, Prometheus/Grafana — are **explicitly deferred**, by §6.2 and by
-Appendix B's own comment. The figure therefore over-claims the delivered scope, and the prose
-at line 263 repeats the over-claim by describing the figure literally.
+Hình 4.1 (PDF **trang 20**) vẽ tầng nguồn gồm **MySQL, PostgreSQL, MongoDB 6.0 và application logs**,
+tầng lưu trữ có **Milvus 2.4** bên cạnh pgvector, và tầng governance có **observability
+(Prometheus/Grafana)**.
 
-**Suggested fix:** redraw with deferred components in a distinct visual treatment (dashed
-outline, greyed) and a legend saying "deferred to GR2/Thesis". That turns a discrepancy into
-a demonstration of deliberate scoping — which is the story §6.1 wants to tell anyway.
+Cả ba (MongoDB, Milvus, Prometheus/Grafana) đều **được hoãn rõ ràng** bởi §6.2 và bởi chính comment
+trong Appendix B. Vì vậy hình vẽ đang claim quá phạm vi đã giao, và đoạn văn ở dòng 263 lặp lại việc
+claim quá đó khi mô tả hình theo nghĩa đen.
 
----
-
-# Part G — How to present this in the GR2 report
-
-A suggested framing, since the material is unusually favourable.
-
-**1. Lead with the findings, do not bury them.** An implementation phase that reproduces a
-design exactly has demonstrated only that the design was easy. An implementation phase that
-finds **four specific, technically-explained places where the design cannot be executed** has
-demonstrated genuine engineering. A1 in particular — a *logical contradiction* between two
-requirements, with a fix that satisfies both — is the strongest single result so far.
-
-**2. Show A1 with both configs side by side.** The Appendix C SMT chain and the
-connector-native config, with the nested-envelope explanation between them. It is visual,
-concrete, and takes ninety seconds to explain.
-
-**3. Frame Part B consistently as "substitution, not omission".** For each: *the guarantee
-GR1 claims is unchanged; the enforcement engine is lighter; here is what production would
-use.* Never let it read as "we could not get Ranger working".
-
-**4. Be explicit about what you lost.** Column-level lineage on the Bronze hop (B2). Type-level
-schema evolution (A2). The salt in the config file (A1). **Naming your own limitations is what
-separates an engineering report from a sales pitch**, and an examiner will find them anyway.
-
-**5. Keep the "verified vs written" distinction visible.** [`docs/STATUS.md`](STATUS.md)
-already tracks it. Reporting that connector masking is *implemented but not yet exercised* is
-strictly better than implying it works.
-
-**6. Fix Part F before submission.** F1 especially — a report that cites a missing section
-eight times, including from its abstract, undercuts otherwise solid work.
+**Gợi ý sửa:** vẽ lại với các thành phần hoãn theo kiểu khác (viền nét đứt, màu xám) kèm chú giải
+"deferred to GR2/Thesis". Điều đó biến một điểm lệch thành minh chứng cho việc khoanh phạm vi có chủ
+đích, đúng câu chuyện §6.1 muốn kể.
 
 ---
 
+# Part G — How to present this in the GR2 report (cách trình bày trong báo cáo GR2)
+
+Một gợi ý cách đóng khung, vì tư liệu ở đây thuận lợi một cách bất thường.
+
+**1. Mở đầu bằng các finding, đừng chôn chúng.** Một giai đoạn implement tái tạo y hệt thiết kế chỉ
+chứng minh được rằng thiết kế dễ làm. Một giai đoạn implement tìm ra **những chỗ cụ thể, có giải thích
+kỹ thuật, nơi thiết kế không thể thực thi** thì chứng minh được năng lực kỹ thuật thật. Riêng A1, một
+*mâu thuẫn logic* giữa hai yêu cầu cùng một bản sửa thoả cả hai, là kết quả đơn lẻ mạnh nhất cho tới
+giờ.
+
+**2. Trình bày A1 với hai cấu hình đặt cạnh nhau.** Chuỗi SMT của Appendix C và cấu hình
+connector-native, xen giữa là phần giải thích về envelope lồng nhau. Trực quan, cụ thể, giải thích
+trong chín mươi giây.
+
+**3. Đóng khung Part B nhất quán là "substitution, not omission".** Với mỗi mục: *cam kết GR1 đưa ra
+không đổi; engine cưỡng chế nhẹ hơn; đây là thứ production sẽ dùng.* Đừng bao giờ để nó đọc thành
+"chúng tôi không chạy được Ranger".
+
+**4. Nói rõ những gì đã mất.** Lineage mức cột ở chặng Bronze (B2). Schema evolution mức kiểu dữ liệu
+(A2). Salt nằm trong file cấu hình (A1). **Tự nêu giới hạn của mình là thứ phân biệt một báo cáo kỹ
+thuật với một bài quảng cáo**, và giám khảo đằng nào cũng sẽ tìm ra chúng.
+
+**5. Giữ sự phân biệt "verified vs written" luôn hiển thị.** [`docs/STATUS.md`](STATUS.md) đã theo dõi
+điều này. Báo một thứ là *đã implement nhưng chưa chạy* luôn tốt hơn ngầm ý rằng nó chạy được. *(Ví dụ
+gốc ở mục này, "connector masking is implemented but not yet exercised", đã lỗi thời: masking đã
+verified từ 2026-08-28. Nguyên tắc thì vẫn giữ nguyên.)*
+
+**6. Sửa Part F trước khi nộp.** Đặc biệt F1: một báo cáo trích dẫn tám lần một mục không tồn tại, kể
+cả từ abstract, sẽ làm giảm giá trị của một công trình vốn vững chắc.
+
 ---
 
-# Appendix: on the two copies of the report
+---
 
-`docs/` holds both `GR1_report.pdf` (the real deliverable, 49 pages) and `GR1_report.md`
-(a conversion). The analysis in this document was written from the Markdown and then
-**re-verified against the PDF**. Result:
+# Appendix: on the two copies of the report (phụ lục: về hai bản sao của báo cáo)
 
-**The conversion is faithful.** Normalised text length matches at 98% (74,030 vs 75,618
-characters). Every load-bearing quotation — the Appendix C transform chain, the Appendix B
-image tags, the Avro converter lines, the `??` markers, the Table 4.2 row count, the
-`bucket(32, user_id)` claim — appears identically in both.
+`docs/` chứa cả `GR1_report.pdf` (deliverable thật, 49 trang) và `GR1_report.md` (bản chuyển đổi).
+Phân tích trong tài liệu này được viết từ bản Markdown rồi **kiểm lại với PDF**. Kết quả:
 
-**Known conversion artifacts** (present in the `.md` only, harmless but worth knowing):
+**Bản chuyển đổi trung thực.** Độ dài văn bản sau chuẩn hoá khớp 98% (74,030 vs 75,618 ký tự). Mọi
+trích dẫn quan trọng (chuỗi transform Appendix C, image tag Appendix B, các dòng Avro converter, dấu
+`??`, số dòng Table 4.2, claim `bucket(32, user_id)`) đều xuất hiện giống hệt nhau ở cả hai bản.
 
-- Hyphenation across line breaks is preserved differently, so text extraction shows joins
-  like `opensource`, `freshnessunaware`, `datasovereignty`. These are extraction effects,
-  not errors in either document.
-- The PDF's fixed-width tables were reflowed into Markdown tables. Content survives, but
-  cell alignment in the raw PDF text (e.g. Table 2.1) reads as interleaved columns.
-- **Both figure paths were broken** — the conversion pointed at
-  `GR1_report_fixed_assets/figure-4-*.png`, while the files sit in `docs/`. Fixed
-  2026-08-25; the images now render.
+**Các lỗi do chuyển đổi đã biết** (chỉ có trong `.md`, vô hại nhưng nên biết):
 
-**Use the PDF as the citable source** when writing GR2 (page numbers, figure and table
-numbering). The Markdown is convenient for grep and diff, and is trustworthy for content.
+- Gạch nối khi xuống dòng được giữ khác đi, nên văn bản trích ra có những chữ dính như `opensource`,
+  `freshnessunaware`, `datasovereignty`. Đây là hiệu ứng trích xuất, không phải lỗi của bản nào.
+- Các bảng độ rộng cố định của PDF được chuyển thành bảng Markdown. Nội dung còn nguyên, nhưng căn
+  chỉnh ô trong văn bản PDF thô (ví dụ Table 2.1) trông như các cột xen kẽ nhau.
+- **Cả hai đường dẫn hình đều hỏng**: bản chuyển đổi trỏ tới
+  `GR1_report_fixed_assets/figure-4-*.png`, trong khi file nằm trong `docs/`. Đã sửa 2026-08-25; hình
+  giờ hiển thị được.
+
+**Dùng PDF làm nguồn trích dẫn** khi viết GR2 (số trang, đánh số hình và bảng). Bản Markdown tiện cho
+grep và diff, và đáng tin về nội dung.
 
 ---
 
-## Where to find things
+## Where to find things (tìm thứ gì ở đâu)
 
 | | |
 |---|---|
-| Full argument for each substitution | [`docs/adr/`](adr/) |
-| The problem and abstraction ladder | [`docs/PROBLEM.md`](PROBLEM.md) |
-| What is built and verified right now | [`docs/STATUS.md`](STATUS.md) |
-| Durable working context + environment gotchas | [`CLAUDE.md`](../CLAUDE.md) |
-| Live state in one command | `python mosaic.py doctor` |
+| Lập luận đầy đủ cho mỗi substitution | [`docs/adr/`](adr/) |
+| Bài toán và cái thang trừu tượng | [`docs/PROBLEM.md`](PROBLEM.md) |
+| Cái gì đã xây và đã kiểm chứng lúc này | [`docs/STATUS.md`](STATUS.md) |
+| Nhật ký xây dựng từng milestone | [`docs/BUILD-LOG.md`](BUILD-LOG.md) |
+| Ngữ cảnh làm việc lâu dài + các gotcha môi trường | [`CLAUDE.md`](../CLAUDE.md) |
+| Trạng thái sống trong một lệnh | `python mosaic.py doctor` |

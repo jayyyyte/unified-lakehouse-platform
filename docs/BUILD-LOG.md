@@ -1,493 +1,531 @@
-# MOSAIC — Build Log
+# MOSAIC — Build Log (Nhật ký xây dựng)
 
-**A dated, per-milestone record of what was built, how it was verified, and what each run
-actually measured.**
+**Ghi chép theo ngày và theo milestone: đã xây gì, kiểm chứng thế nào, và mỗi lần chạy thực sự đo
+được gì.**
 
-Last updated: 2026-10-05 · Covers M0–M3 (M3 complete)
+Last updated: 2026-10-16 · Covers M0–M3 (M3 complete)
 
-All M2 figures below come from the final run against the corrected configuration and the
-corrected harness — ledger entry 7 of 7 in `experiments/results/restart_events.jsonl`.
+> Thuật ngữ khó tra ở
+> [PROBLEM.md, Phụ lục C](PROBLEM.md#phụ-lục-c--bảng-thuật-ngữ-glossary).*
+>
+> *Bố cục đã được sắp lại: mỗi milestone có cùng khung **Mục tiêu → Đầu việc (cách làm, output, kết
+> quả) → Số đo → Phát hiện → Lỗi tự bắt được**. Nội dung và số liệu giữ nguyên bản gốc (commit
+> `bf167cc`); phần M0/M1 được bổ sung chi tiết từ CHANGES-FROM-GR1, ADR và git history.*
 
 ---
 
-## How to read this document
+## Mục lục
 
-Three documents describe this project's state and they do **not** overlap:
+0. [Cách đọc tài liệu này](#0-cách-đọc-tài-liệu-này)
+1. [Dòng thời gian tổng quan](#1-dòng-thời-gian-tổng-quan)
+2. [M0 — Problem spec, skeleton, stack](#2-m0--problem-spec-skeleton-stack)
+3. [M1 — Sources, seed corpus, load generator, CDC live](#3-m1--sources-seed-corpus-load-generator-cdc-live)
+4. [M2 — CDC restart safety và WAL guard](#4-m2--cdc-restart-safety-và-wal-guard)
+5. [M3 — Medallion on Iceberg](#5-m3--medallion-on-iceberg)
+6. [Sau M3 — giới hạn bộ nhớ Trino](#6-sau-m3--giới-hạn-bộ-nhớ-trino-2026-10-1316)
+7. [Deliverables: bản đồ file theo milestone](#7-deliverables-bản-đồ-file-theo-milestone)
+8. [Environment facts đã xác lập](#8-environment-facts-đã-xác-lập)
+9. [Command reference](#9-command-reference)
+10. [Độ phủ KPI của GR1 Table 4.4](#10-độ-phủ-kpi-của-gr1-table-44)
+11. [Những gì CHƯA được kiểm chứng](#11-những-gì-chưa-được-kiểm-chứng)
+12. [Run ledgers](#12-run-ledgers)
 
-| Document | Answers | Changes |
+---
+
+## 0. Cách đọc tài liệu này
+
+Ba tài liệu mô tả trạng thái dự án và **không chồng lấn** nhau:
+
+| Tài liệu | Trả lời câu hỏi | Thay đổi khi nào |
 |---|---|---|
-| [STATUS.md](STATUS.md) | *Where are we right now?* | every session |
-| [CHANGES-FROM-GR1.md](CHANGES-FROM-GR1.md) | *How does the build differ from the GR1 design, and why?* | when a deviation is found |
-| **this file** | *What was built, in what order, and what did each run measure?* | append-only |
+| [STATUS.md](STATUS.md) | *Bây giờ ta đang ở đâu?* | mỗi phiên làm việc (bị ghi đè) |
+| [CHANGES-FROM-GR1.md](CHANGES-FROM-GR1.md) | *Bản build khác thiết kế GR1 thế nào, vì sao?* | khi phát hiện một điểm lệch |
+| **file này** | *Đã xây gì, theo thứ tự nào, mỗi lần chạy đo được gì?* | **chỉ thêm vào** (append-only) |
 
-STATUS.md is a snapshot and is overwritten. This file is a **ledger**: entries are appended,
-never rewritten, so the trajectory survives even when the snapshot moves on. When defending
-GR2, this is where the "we did the work and here is the evidence" material comes from.
+STATUS.md là **ảnh chụp** và bị ghi đè. File này là **sổ cái** (*ledger*): mục mới được thêm vào,
+mục cũ không viết lại, nên quỹ đạo phát triển vẫn còn nguyên khi ảnh chụp đã trôi đi. Khi bảo vệ
+GR2, đây là nơi lấy tư liệu cho luận điểm *"chúng tôi đã làm, và đây là bằng chứng"*.
 
-**Provenance of entries.** M0 and M1 below are reconstructed from STATUS.md and
-CHANGES-FROM-GR1.md, which earlier sessions wrote at the time. **M2 is first-hand**: every
-number in it was produced by a command run on 2026-09-07/08 and is reproducible from the
-machine-readable ledgers in `experiments/results/`.
+**Nguồn gốc các mục:**
+- **M0, M1** được **dựng lại** từ STATUS.md, CHANGES-FROM-GR1.md và các ADR mà các phiên trước viết
+  ngay lúc làm.
+- **M2, M3** là **ghi chép trực tiếp**: mọi con số đều do một lệnh chạy thật sinh ra (M2:
+  2026-09-07/08; M3: tới 2026-10-05), và tái hiện được từ các ledger máy đọc được trong
+  `experiments/results/`.
 
-**Rule for this file:** a row may say *verified* only if a command was actually run and its
-output read. Anything written but not executed is marked **unexecuted**, in the same words
-STATUS.md uses. Numbers are quoted from real output, never from expectation.
-
----
-
-## Contents
-
-1. [Milestone summary](#1-milestone-summary)
-2. [Deliverables by milestone](#2-deliverables-by-milestone)
-3. [M2 — CDC restart safety and the WAL guard](#3-m2--cdc-restart-safety-and-the-wal-guard)
-   - [3.1 What was built](#31-what-was-built)
-   - [3.2 The process, step by step](#32-the-process-step-by-step)
-   - [3.3 Experiment 1 — restart under load](#33-experiment-1--restart-under-load)
-   - [3.4 Experiment 2 — the WAL-accumulation guard](#34-experiment-2--the-wal-accumulation-guard)
-   - [3.5 Findings produced by M2](#35-findings-produced-by-m2)
-   - [3.6 Defects found in this session's own harness](#36-defects-found-in-this-sessions-own-harness)
-4. [Environment facts established](#4-environment-facts-established)
-5. [Command reference added so far](#5-command-reference-added-so-far)
-6. [GR1 Table 4.4 KPI coverage](#6-gr1-table-44-kpi-coverage)
-7. [What is not verified](#7-what-is-not-verified)
-8. [Run ledgers](#8-run-ledgers)
-9. [M3 — Medallion on Iceberg](#9-m3--medallion-on-iceberg)
+**Quy tắc của file:** một dòng chỉ được ghi *verified* nếu lệnh **đã thật sự chạy** và output **đã
+được đọc**. Thứ gì đã viết mà chưa chạy thì ghi **unexecuted**, đúng chữ STATUS.md dùng. Số liệu
+trích từ output thật, không bao giờ trích từ kỳ vọng.
 
 ---
 
-## 1. Milestone summary
+## 1. Dòng thời gian tổng quan
+
+| Ngày | Sự kiện | Milestone |
+|---|---|---|
+| 2026-08-24 | First commit: stack, PROBLEM.md, khung repo; ADR 0001–0004 được viết | M0 **đóng** |
+| 2026-08-25 | Lần chạy thật đầu tiên: Connect chết vì Avro converter → chuyển sang JsonConverter (ADR 0005); sửa logic health check (`compose ps` giấu container đã thoát) | M0 → M1 |
+| 2026-08-28 | `cdc-verify` pass trên cả hai nguồn; masking được chứng minh trên dữ liệu thật; phát hiện A6, A7 | M1 **đóng** |
+| 2026-09-06 | Commit load generator, công cụ verify CDC, `REPLICA IDENTITY FULL` vào repo | (M1, commit) |
+| 2026-09-07/08 | Harness restart-safety + WAL guard; WAL guard **FAIL** → tìm ra A9 → sửa → PASS | M2 **đóng 09-08** |
+| 2026-09-12 | Phát hiện Kafka retention đã xoá topic `categories` (A10, lần 1) | M3 bắt đầu |
+| 2026-09-12..23 | Spark image, Nessie lưu bền, hai smoke test đường ghi, Bronze job (còn thiếu idempotency key) | M3 |
+| ~2026-09-25 | Docker Desktop restart → cả stack dừng 10 ngày | — |
+| 2026-10-05 | Viết idempotency key; mọi topic đã bị retention xoá (A10, lần 2) → resnapshot; chứng minh exactly-once, đo latency, dbt Silver/Gold, reconcile | M3 **đóng 10-05** |
+| 2026-10-13 | Đo được: build incremental 0 dòng vẫn tốn 45–61 s ở `gold.orders`, đẩy heap Trino lên 6+ GiB | sau M3 |
+| 2026-10-16 | Giới hạn bộ nhớ Trino (`-Xmx3G`, `mem_limit 6g`, `MALLOC_ARENA_MAX=2`), đo lại | sau M3 |
 
 | | Milestone | State | Date closed | Evidence |
 |---|---|---|---|---|
 | **M0** | Problem spec, skeleton, stack definition | **done, verified** | 2026-08-24 | 10/10 services healthy; `doctor` |
-| **M1** | Sources, seed corpus, load generator, CDC live | **done, verified** | 2026-08-28 | `cdc-verify` passes both sources; loadgen row-count delta exact |
-| **M2** | CDC ingestion + restart-safety demo | **done, verified** | **2026-09-08** | `restart-safety` PASS, `wal-guard` PASS (after a fix M2 itself found) |
-| **M3** | Medallion on Iceberg (Spark Bronze, dbt-trino Silver/Gold) | **done, verified** | **2026-10-05** | `bronze-verify exactly-once` + `replay` PASS; latency KPI measured; `reconcile` exact after MERGEs under load (§9) |
-| M4 | Trino federation + embedding pipeline | catalogs done in M0 | — | embeddings not started |
-| M5 | N1 Freshness Registry | schema exists, collectors not started | — | — |
-| M6 | N2 Retrieval + fusion engine | not started | — | — |
-| M7 | Experiments E1–E4 | not started | — | — |
-| M8 | N3 governance, `jobmarket` domain, console | not started | — | — |
+| **M1** | Sources, seed corpus, load generator, CDC live | **done, verified** | 2026-08-28 | `cdc-verify` pass cả hai nguồn; số dòng loadgen khớp chính xác |
+| **M2** | CDC ingestion + restart-safety demo | **done, verified** | **2026-09-08** | `restart-safety` PASS, `wal-guard` PASS (sau một bản sửa do chính M2 phát hiện ra) |
+| **M3** | Medallion on Iceberg (Spark Bronze, dbt-trino Silver/Gold) | **done, verified** | **2026-10-05** | `bronze-verify exactly-once` + `replay` PASS; đo KPI latency; `reconcile` khớp tuyệt đối sau MERGE dưới tải |
+| M4 | Trino federation + embedding pipeline | catalog xong từ M0 | — | embedding chưa bắt đầu |
+| M5 | N1 Freshness Registry | có schema, chưa có collector | — | — |
+| M6 | N2 Retrieval + fusion engine | chưa bắt đầu | — | — |
+| M7 | Experiments E1–E4 | chưa bắt đầu | — | — |
+| M8 | N3 governance, `jobmarket` domain, console | chưa bắt đầu | — | — |
 
 ---
 
-## 2. Deliverables by milestone
+## 2. M0 — Problem spec, skeleton, stack
 
-Only files that exist in the tree. Line counts are as at 2026-09-08.
+**Đóng:** 2026-08-24 · **Nguồn:** dựng lại từ CHANGES-FROM-GR1 (C1, C7, D1–D6, A2–A5) và ADR.
 
-| Milestone | Path | Kind | What it does |
-|---|---|---|---|
-| M0 | `docker/compose.yaml` | stack | 10-service single-node deployment, profiles `gov`/`orch`/`console` |
-| M0 | `docker/trino/catalog/*.properties` | config | 4 Trino catalogs: `iceberg` (Nessie), `mysql`, `postgresql`, `platform` |
-| M0 | `sql/platform.sql` | schema | `mosaic_platform` — 6 domain-free `platform.*` tables (N1 + N3) |
-| M0 | `mosaic.py` | tooling | the task runner; `make` is not installed on this machine |
-| M0 | `docs/PROBLEM.md` | spec | the L0–L3 abstraction ladder |
-| M1 | `domains/ecommerce/ddl/{mysql,postgres}.sql` | schema | GR1 Appendix A, plus `REPLICA IDENTITY FULL` (finding A6) |
-| M1 | `domains/ecommerce/connectors/*.json` | config | Debezium connectors with connector-native masking (ADR 0004) |
-| M1 | `tools/seed/` | tooling | deterministic, semantically real corpus generator + bulk loader |
-| M1 | `tools/loadgen/` | tooling | continuous OLTP write mix + the stock-out lever (manufactures L0) |
-| M1 | `tools/cdc/verify.py` | tooling | masking/envelope proof, expectations derived from connector JSON |
-| M1 | `tools/dbsession.py` | tooling | long-lived psql/mysql sessions over `compose exec -T` |
-| **M2** | **`tools/cdc/restart.py`** | **tooling** | **restart-safety + WAL-guard harness (this milestone's main artifact)** |
-| **M2** | **`experiments/results/restart_events.jsonl`** | **data** | **machine-readable ledger of every M2 run** |
-| **M3** | **`pipelines/bronze/bronze_stream.py`** | **pipeline** | **every Debezium topic -> `iceberg.bronze.cdc_events`, envelope intact, idempotency-keyed** |
-| **M3** | **`docker/spark/`** | **image** | **`mosaic/spark:3.5.1-iceberg1.5.2`, jars baked, Iceberg pinned to Trino's** |
-| **M3** | **`pipelines/transform/`** | **dbt project** | **domain-free: `assemble.py` generates Silver, `cdc_current_state` macro, Bronze source** |
-| **M3** | **`domains/ecommerce/gold/`** | **models** | **4 Gold models + tests, incl. GR1 §4.3 cross-source checks** |
-| **M3** | **`docker/dbt/`** | **image** | **`mosaic/dbt:1.8` (dbt-core 1.8.8, dbt-trino 1.8.3)** |
-| **M3** | **`tools/bronze/verify.py`** | **tooling** | **Bronze exactly-once (both replay sources) + commit->Bronze latency** |
-| **M3** | **`tools/lakehouse/reconcile.py`** | **tooling** | **Silver vs the live sources, row by row** |
-| **M3** | **`tools/cdc/snapshot.py`, `tools/trino.py`** | **tooling** | **ad-hoc BLOCKING snapshot; stdlib Trino REST client** |
+### 2.1 Mục tiêu
+
+Có một **bài toán được phát biểu rõ** (GR1 chưa có), một **khung repo** tách lõi chung khỏi domain,
+và một **stack Docker chạy được trên một máy**, khoẻ mạnh thật chứ không phải chỉ "đã khởi động".
+
+### 2.2 Đầu việc
+
+| # | Đầu việc | Cách làm | Output | Kết quả |
+|---|---|---|---|---|
+| 1 | Phát biểu bài toán | Viết một câu query bị sai (L0), đặt metric đo nó (stale-hit rate@10, nDCG@10), và dựng cái thang L0→L3 | `docs/PROBLEM.md` | Đây là xương sống của mọi việc sau (C1) |
+| 2 | Tách lõi khỏi domain | `platform/` = lõi chung, `domains/<domain>/` = mọi thứ biết "product" là gì | cấu trúc thư mục | (C7) |
+| 3 | Cổng kiểm tra trừu tượng | Lệnh quét `platform/` tìm 12 từ thuộc *cả hai* domain | `mosaic.py check-abstraction` | PASS: "scanned 6 files under platform/ for 12 domain terms" |
+| 4 | Task runner | Máy không có `make`, nên viết `mosaic.py` chỉ dùng thư viện chuẩn Python, chạy được Windows/macOS/Linux | `mosaic.py` | (D1) |
+| 5 | Stack Docker | 10 service ở profile mặc định (`mysql`, `postgres`, `kafka`, `schema-registry`, `kafka-connect`, `minio`, `minio-init`, `nessie`, `spark`, `trino`); `opa`/`marquez` (profile `gov`), `airflow` (`orch`), `api` (`console`) là tuỳ chọn | `docker/compose.yaml` | (D3): stack đầy đủ của Appendix B không vừa một máy |
+| 6 | `up` đợi **healthy** | `compose up -d` trả về ngay khi container *start*, trong khi Kafka Connect nhận TCP rất lâu trước khi nhận connector. `up` đợi tới khi mọi service healthy | `mosaic.py up` | (D2) |
+| 7 | Tham số hoá port | Cổng 9001 trên máy bị một container khác (`lakehouse-control-plane`) chiếm. Mọi port publish ra host đặt trong `docker/.env`; MinIO console chuyển sang 9101 | `docker/.env` | (D4); port bên trong container không đổi |
+| 8 | DB metadata riêng | `mosaic_platform` với 6 bảng `platform.*`: `datasets`, `watermarks`, `watermark_history`, `column_tags`, `column_lineage`, `query_audit`. Đặt riêng vì DB domain là nguồn CDC, để chung thì bảng platform sẽ bị capture và làm bẩn luồng thay đổi | `sql/platform.sql` | (D5) |
+| 9 | 4 Trino catalog | `iceberg` (qua Nessie), `mysql`, `postgresql`, `platform`; catalog thứ 4 cho phép join watermark với chính dữ liệu nó mô tả trong một câu query | `docker/trino/catalog/*.properties` | tất cả query được |
+| 10 | Sửa image tag hỏng | `debezium/connect:2.7` không tồn tại → `2.7.3.Final`; `projectnessie/nessie:0.90.4` không có trên Docker Hub → `ghcr.io/...` | compose | (A3, A4) |
+| 11 | Healthcheck Nessie | Image Nessie không có curl/wget nên healthcheck HTTP fail mãi, chặn Trino và Spark khởi động. Bỏ healthcheck, dependent dùng `service_started`, probe từ host | compose | (A5) |
+| 12 | Quyết định kiến trúc | ADR 0001 (OPA thay Ranger), 0002 (Marquez thay DataHub), 0003 (dbt-trino cho Silver/Gold), 0004 (masking native trong connector) | `docs/adr/` | 2026-08-24 |
+| 13 | Báo cáo trạng thái | Một lệnh kiểm mọi thứ | `mosaic.py doctor` | — |
+
+### 2.3 Kiểm chứng
+
+`python mosaic.py up` → **10/10 service healthy**; `doctor` pass mọi check; `check-abstraction`
+PASS.
+
+### 2.4 Phát hiện & lỗi tự bắt được (xảy ra quanh 2026-08-25, lần chạy thật đầu tiên)
+
+- **A2 / ADR 0005:** worker Kafka Connect **chết ngay khi khởi động** vì
+  `io.confluent.connect.avro.AvroConverter` không có trong image. Chuyển sang `JsonConverter`,
+  `schemas.enable=false`.
+- **`docker compose ps` giấu container đã thoát** (STATUS finding 5): một service crash biến mất khỏi
+  bảng đếm health, dẫn tới một lần báo sai "all healthy". `mosaic.py` giờ so với
+  `compose config --services` và đọc `ps -a` kèm exit code.
 
 ---
 
-## 3. M2 — CDC restart safety and the WAL guard
+## 3. M1 — Sources, seed corpus, load generator, CDC live
 
-**Goal, as STATUS.md set it before the work started:**
+**Đóng:** 2026-08-28 (code commit vào repo 2026-09-06) · **Nguồn:** dựng lại từ CHANGES-FROM-GR1
+(A1, A6, A7, C9, D6–D10) và ADR 0004.
 
-> 1. Kill `kafka-connect` mid-stream while `loadgen` is running, restart it, and show that
->    `_connect_offsets` resumes exactly where it stopped — no gap, no duplicate beyond
->    at-least-once.
-> 2. Same test for the PostgreSQL replication slot: confirm `confirmed_flush_lsn` advances
->    and that the heartbeat keeps it advancing while the captured tables are idle — the
->    WAL-bloat guard from GR1 §4.4 has never been exercised under a real stall.
+### 3.1 Mục tiêu
 
-Both are now done. The second one **failed on first execution**, which is the most valuable
-result in this milestone.
+Có hai database nguồn chứa **dữ liệu mẫu có ngữ nghĩa thật**, CDC chạy trên cả hai và **chứng minh
+được** là PII đã bị che. Thêm một công cụ sinh tải liên tục và một **công tắc tạo lỗi L0** theo yêu
+cầu.
 
-### 3.1 What was built
+### 3.2 Đầu việc
 
-| File | Change | Why |
+| # | Đầu việc | Cách làm | Output | Kết quả |
+|---|---|---|---|---|
+| 1 | Schema nguồn | Dùng nguyên văn DDL của GR1 Appendix A, đặt dưới `domains/` để "thêm domain chỉ chạm vào `domains/`" đúng theo nghĩa đen | `domains/ecommerce/ddl/{mysql,postgres}.sql` | MySQL 3 bảng, PostgreSQL 6 bảng (D6) |
+| 2 | Debezium connectors | Masking **ngay trong connector**: `column.mask.hash.SHA-256.with.salt...` cho email/phone, `column.exclude.list` cho `raw_card_number`, `national_id`. **Không** dùng `unwrap`, để giữ envelope. Đặt rõ `decimal.handling.mode=string` (mặc định cho ra bytes base64) và `time.precision.mode=connect` | `domains/ecommerce/connectors/*.json` | (A1, D7, D8) |
+| 3 | Seed corpus generator | Mô tả sản phẩm được **ghép từ bộ từ vựng theo từng category** (không dùng lorem ipsum). Tên, mô tả và category lá được sinh **cùng nhau** để luôn khớp nhau. Kết quả **tất định** theo `(scale, seed, now)`, ghi trong `manifest.json` | `tools/seed/` | 86,314 dòng / 7 bảng ở scale `small`. Kiểm: query "waterproof hiking backpack" trả về dry bag, bếp cắm trại, gậy trekking, không có đồ bếp (C9) |
+| 4 | Bulk loader | `LOAD DATA INFILE` cần quyền global `FILE`. Tài khoản `cdc` cố ý chỉ có quyền replication tối thiểu, nên nạp bằng `root`. **Không** cấp `FILE` cho `cdc` | `tools/seed/load.py` | (D9) |
+| 5 | Load generator | Ghi OLTP liên tục (đặt hàng, thanh toán, đổi trạng thái, trừ kho, nhập kho). Đo **số dòng đã commit** trên một connection riêng, throttle theo con số đó, in riêng *sent* và *sustained* | `tools/loadgen/` | ~**100 ops/s sustained** (bị giới hạn bởi fsync mỗi commit dưới Docker Desktop) |
+| 6 | Công tắc L0 | `stockout --top 3` cho các sản phẩm đang đứng đầu hết hàng; `restock --last 3` nhập lại. Mỗi sự kiện ghi kèm timestamp commit ở nguồn | `mosaic.py stockout/restock`, `stockout_events.jsonl` | Tạo ra đúng lỗi L0 theo yêu cầu |
+| 7 | Verify CDC | Rút kỳ vọng **từ chính cấu hình connector**, lấy mẫu ở **đuôi** topic (không lấy từ đầu, xem 3.5), kiểm envelope, kiểm mask trên **cả before lẫn after**, kiểm cột bị loại **vắng mặt hẳn** | `tools/cdc/verify.py`, `mosaic.py cdc-verify` | PASS cả hai nguồn |
+| 8 | Phiên DB dài | Phiên psql/mysql sống lâu qua `compose exec -T` để công cụ không phải mở connection mỗi câu | `tools/dbsession.py` | — |
+| 9 | Replica identity | `REPLICA IDENTITY FULL` trên `users`, `products`, `inventory` (xem A6 bên dưới) | DDL PostgreSQL | (D10) |
+
+### 3.3 Số đo (cdc-verify, 2026-08-28, 300 message mỗi topic, sau một lần `loadgen`)
+
+| Khẳng định | Bằng chứng |
+|---|---|
+| Envelope nguyên vẹn | mọi message có `op` / `before` / `after` / `source`; không có `ExtractNewRecordState` |
+| `after` đã mask | kiểm 754 giá trị đã mask trên `orders`, 674 trên `users`, tất cả là hex digest |
+| **`before` đã mask** | **502 before image trên cả hai nguồn, tất cả đã mask** |
+| Cột bị loại vắng mặt | `payments.raw_card_number` và `users.national_id` vắng mặt trong 637 image, tức là không có key, không chỉ là null |
+| Load generator | 5,401 ops / 240 s, chênh số dòng khớp chính xác trên 4 bảng (lần chạy 2026-10-05) |
+
+### 3.4 Phát hiện của M1
+
+- **A6: PostgreSQL không có before image.** Với replica identity mặc định, `products` và `inventory`
+  mỗi bảng có 300 event `op=u` nhưng **0 before image**, trong khi MySQL `orders` có 79/79. Sửa bằng
+  `REPLICA IDENTITY FULL`. Sau khi sửa, lệnh `stockout` cho ra
+  `before: {stock_qty: 192}` → `after: {stock_qty: 0}`, đúng sự kiện L0 kèm trạng thái trước đó.
+- **A7: hash bị cắt theo độ rộng cột.** `buyer_phone VARCHAR(32)` chỉ nhận 32 ký tự hex (nửa digest
+  SHA-256), không có log nào báo. `verify.py` đọc độ rộng cột và kỳ vọng `min(64, width)`.
+- **Bẫy MySQL `ERROR 1045`**: thiếu quyền `FILE` bị báo y như sai mật khẩu. Ba đường kết nối khác
+  đều xác thực được; chỉ riêng câu `LOAD DATA INFILE` lỗi. Tốn một vòng debug.
+
+### 3.5 Lỗi tự bắt được trong M1
+
+| Lỗi | Triệu chứng | Sửa |
 |---|---|---|
-| `tools/cdc/restart.py` | **new** | The harness. Two sub-commands: `restart`, `wal-guard`. |
-| `mosaic.py` | +2 commands | `restart-safety`, `wal-guard`, following the existing `_tool()` delegation pattern |
-| `domains/ecommerce/ddl/postgres.sql` | `cdc_heartbeat` added to `mosaic_pub` | the fix for finding A9 below |
-| `domains/ecommerce/connectors/postgres-cdc.json` | `public.cdc_heartbeat` added to `table.include.list` | same fix; the connector must *capture* the table it heartbeats into |
-| `experiments/results/restart_events.jsonl` | **new** | append-only run ledger, same shape as `stockout_events.jsonl` |
+| Lấy mẫu topic `--from-beginning` | Toàn bộ mẫu là initial snapshot (`op=r`, `before: null`), nên phép kiểm before-image **pass một cách vô nghĩa** dù đọc bao nhiêu message | Lấy mẫu từ **đuôi** topic |
+| Generator đọc giờ hệ thống ở cấp module | Cùng seed cho ra timestamp khác nhau mỗi lần, phá tính tất định mà E3/E4 cần | Bỏ, thêm một check so sánh từng byte để canh |
+| Tên/mô tả sinh độc lập | Ra những thứ như *"Minimalist Kettle"* (ấm đun) nhưng mô tả lại là nồi; truy hồi đúng mà trông như sai | Sinh tên, mô tả, category cùng lúc |
+| Nhập kho vô điều kiện | Nhập cho sản phẩm bán chạy bất kể còn bao nhiêu: tồn kho phình lên 2,664 so với seed 500, **không gì có thể hết hàng tự nhiên** | Chỉ nhập khi tồn kho thấp |
+| Nhập kho tức thì | Phần sản phẩm cố ý để trống trong seed bị lấp đầy trong vòng một phút | Thêm thời gian chờ `RESTOCK_LEAD_SECONDS`. **Khoảng chờ này chính là cửa sổ mà bảng xếp hạng cũ tự tin sai** |
+| Báo tốc độ gửi | Một lần báo 549 ops/s trong khi MySQL vẫn đang commit phần việc đó **152 s sau**; một lần khác **mất âm thầm 5,327 orders** khi client bị kill lúc đang xả hàng đợi | Đo số dòng đã commit, in *sent* và *sustained* riêng; cuối mỗi lần chạy đếm lại số dòng ở cả hai engine |
 
-**Design commitments carried into the harness** (each exists to stop a specific way of
-reporting success while proving nothing):
+Ghi chú thiết kế: load generator **không bao giờ chạm vào `products.name` hay
+`products.description`**. Đầu vào của kênh ngữ nghĩa được giữ đứng yên có chủ đích, để mọi stale hit
+chỉ có thể quy cho sự bất đối xứng độ tươi chứ không phải do text bị đổi dưới chân embedding.
 
-- **Nothing in it names a domain.** Captured tables and their topics come from the
-  connector's own `topic.prefix` + `table.include.list` (reusing `expectations()` from
-  `tools/cdc/verify.py`); the generated-key column comes from the live catalog
-  (`information_schema` on MySQL, `pg_attrdef` on PostgreSQL). Point it at another domain's
-  connectors and it measures that domain.
-- **The no-gap proof is exact, not statistical.** Every captured table with a generated key
-  writes a *contiguous* id range. The run brackets that range at the kill and again when
-  writing stops, then requires every id in it on the topic. One missing id fails the run and
-  names itself.
-- **Duplicates are evidence, not failure.** See finding A8.
-- **"Caught up" is detected mechanically** — topic end-offsets flat for 3 consecutive polls —
-  never eyeballed, and measured over the *workload's* topics only. The connector's own
-  heartbeat topic is permanent background traffic and is excluded; leaving it in cost one run
-  a bogus 214 s "recovery" (defect 6 below).
+---
 
-### 3.2 The process, step by step
+## 4. M2 — CDC restart safety và WAL guard
 
-| # | Step | Command / action | Result |
+**Đóng:** 2026-09-08 · **Ghi chép trực tiếp.** Mọi số liệu M2 lấy từ lần chạy cuối cùng với cấu hình
+và harness đã sửa: ledger entry 7/7 trong `experiments/results/restart_events.jsonl`.
+
+### 4.1 Mục tiêu (STATUS.md đặt ra trước khi bắt đầu)
+
+> 1. Kill `kafka-connect` giữa chừng khi `loadgen` đang chạy, restart nó, và cho thấy
+>    `_connect_offsets` chạy tiếp đúng chỗ đã dừng: **không gap, không trùng ngoài mức
+>    at-least-once**.
+> 2. Test tương tự cho replication slot của PostgreSQL: xác nhận `confirmed_flush_lsn` tiến lên,
+>    và heartbeat giữ cho nó tiếp tục tiến khi các bảng capture đang nhàn rỗi. Đây là **WAL-bloat
+>    guard của GR1 §4.4, chưa từng được thử dưới một lần đình trệ thật**.
+
+Cả hai đã xong. Mục tiêu thứ hai **FAIL ngay lần chạy đầu**, và đó là kết quả có giá trị nhất của
+milestone này.
+
+### 4.2 Đầu việc
+
+| File | Thay đổi | Vì sao |
+|---|---|---|
+| `tools/cdc/restart.py` | **mới** | Harness, có hai sub-command: `restart`, `wal-guard` |
+| `mosaic.py` | +2 lệnh | `restart-safety`, `wal-guard`, theo pattern uỷ quyền `_tool()` sẵn có |
+| `domains/ecommerce/ddl/postgres.sql` | thêm `cdc_heartbeat` vào `mosaic_pub` | bản sửa cho finding A9 |
+| `domains/ecommerce/connectors/postgres-cdc.json` | thêm `public.cdc_heartbeat` vào `table.include.list` | cùng bản sửa: connector phải *capture* chính bảng nó ghi heartbeat vào |
+| `experiments/results/restart_events.jsonl` | **mới** | ledger append-only, cùng dạng với `stockout_events.jsonl` |
+
+**Các cam kết thiết kế của harness.** Mỗi cam kết tồn tại để chặn một cách cụ thể để "báo thành
+công mà không chứng minh được gì":
+
+- **Không nêu tên domain nào.** Danh sách bảng và topic lấy từ `topic.prefix` + `table.include.list`
+  của connector (dùng lại `expectations()` của `tools/cdc/verify.py`). Cột khoá tự sinh lấy từ catalog
+  sống (`information_schema` trên MySQL, `pg_attrdef` trên PostgreSQL). Trỏ harness vào connector của
+  domain khác là nó đo domain đó.
+- **Chứng minh không-gap một cách chính xác, không thống kê.** Mỗi bảng có khoá tự sinh ghi một
+  dải id **liên tục**. Harness khoanh dải đó lúc kill và lúc ngừng ghi, rồi yêu cầu **mọi id** trong
+  dải phải có trên topic. Thiếu một id là run fail và in ra đúng id đó.
+- **Trùng lặp là bằng chứng, không phải lỗi** (xem A8).
+- **"Đã đuổi kịp" được phát hiện máy móc**: end-offset các topic đứng yên qua 3 lần poll liên tiếp,
+  không nhìn bằng mắt, và chỉ đo trên topic của *workload*. Topic heartbeat là traffic nền vĩnh viễn
+  nên bị loại; để nó lại từng làm một lần chạy báo "recovery" sai là 214 s (lỗi #6 ở 4.6).
+
+**Quy trình từng bước:**
+
+| # | Bước | Lệnh / hành động | Kết quả |
 |---|---|---|---|
-| 1 | Establish the state | `python mosaic.py doctor` | Docker Desktop was down; started it, `up` → **10/10 healthy**, all checks pass |
-| 2 | Probe the offsets API | `curl :8083/connectors/<n>/offsets` | works; returns binlog `file`/`pos`/`gtids` and PG `lsn_commit` — better than parsing `_connect_offsets` |
-| 3 | **Find the fact the design turns on** | grep worker log for `offset.flush.interval.ms` | **60000** — offsets flush on a timer, not per record |
-| 4 | Probe MySQL position syntax | `SHOW MASTER STATUS` vs `SHOW BINARY LOG STATUS` | 8.0.46 → the former; the latter is an 8.4 spelling and errors |
-| 5 | Probe slot instrumentation | `pg_replication_slots` + `pg_wal_lsn_diff` | all columns exist on PG 15 |
-| 6 | Confirm the cheap poll | `kafka-get-offsets.sh --topic-partitions a,b,c` | one exec returns all topics (`--topic-list` is **not** an option in this build) |
-| 7 | Write the harness | `tools/cdc/restart.py` | — |
-| 8 | Smoke-test derivation only | import `topology()` | 7 captured tables, 6 with a generated key, all topics correct |
-| 9 | Run experiment 1 | `python mosaic.py restart-safety` | **PASS**, but one evidence line proved nothing → fixed, see §3.6 |
-| 10 | Re-run experiment 1 | same | **PASS**, every line load-bearing |
-| 11 | Run experiment 2 | `python mosaic.py wal-guard --idle 130` | **FAIL** — the guard was inert |
-| 12 | Diagnose | inspect `pg_publication_tables` | `cdc_heartbeat` was **not** in `mosaic_pub` |
-| 13 | Fix | `ALTER PUBLICATION` + DDL + connector edits + re-register | publication now 5 tables |
-| 14 | Re-run experiment 2 | `python mosaic.py wal-guard --idle 130` | **PASS** |
-| 15 | Re-check the M1 proof still holds | `python mosaic.py cdc-verify` | **PASS** — 807 UPDATE events, 807 before images; the new `cdc_heartbeat` topic carries 67 `op=c` events, so the fix is visible end-to-end |
+| 1 | Nắm trạng thái | `python mosaic.py doctor` | Docker Desktop đang tắt; bật lên, `up` → **10/10 healthy** |
+| 2 | Thăm dò offsets API | `curl :8083/connectors/<n>/offsets` | chạy được; trả về binlog `file`/`pos`/`gtids` và PG `lsn_commit`, tốt hơn tự parse `_connect_offsets` |
+| 3 | **Tìm ra sự thật mà thiết kế xoay quanh** | grep log worker tìm `offset.flush.interval.ms` | **60000**: offset flush theo đồng hồ, không theo record |
+| 4 | Cú pháp vị trí MySQL | `SHOW MASTER STATUS` vs `SHOW BINARY LOG STATUS` | bản 8.0.46 dùng cái đầu; cái sau là cú pháp 8.4 và báo lỗi |
+| 5 | Công cụ đo slot | `pg_replication_slots` + `pg_wal_lsn_diff` | mọi cột có đủ trên PG 15 |
+| 6 | Cách poll rẻ | `kafka-get-offsets.sh --topic-partitions a,b,c` | một lần exec trả về mọi topic (`--topic-list` **không có** trong bản này) |
+| 7 | Viết harness | `tools/cdc/restart.py` | — |
+| 8 | Smoke test phần suy luận | import `topology()` | 7 bảng capture, 6 có khoá tự sinh, mọi topic đúng |
+| 9 | Chạy thí nghiệm 1 | `python mosaic.py restart-safety` | **PASS**, nhưng một dòng bằng chứng không chứng minh được gì → sửa (lỗi #1) |
+| 10 | Chạy lại thí nghiệm 1 | như trên | **PASS**, mọi dòng đều có giá trị |
+| 11 | Chạy thí nghiệm 2 | `python mosaic.py wal-guard --idle 130` | **FAIL**: guard không có tác dụng |
+| 12 | Chẩn đoán | xem `pg_publication_tables` | `cdc_heartbeat` **không** có trong `mosaic_pub` |
+| 13 | Sửa | `ALTER PUBLICATION` + sửa DDL + sửa connector + đăng ký lại | publication giờ có 5 bảng |
+| 14 | Chạy lại thí nghiệm 2 | `python mosaic.py wal-guard --idle 130` | **PASS** |
+| 15 | Kiểm lại bằng chứng M1 | `python mosaic.py cdc-verify` | **PASS**: 807 UPDATE event, 807 before image; topic `cdc_heartbeat` mới có 67 event `op=c`, tức bản sửa thấy được end-to-end |
 
-### 3.3 Experiment 1 — restart under load
+### 4.3 Thí nghiệm 1: restart dưới tải
 
 ```
 python mosaic.py restart-safety --rate 25 --warmup 20 --stall 45 --drain 20
 ```
 
-Mode `kill` = **SIGKILL**, deliberately. `docker stop` sends SIGTERM, which lets Connect
-flush its offsets on the way out — a graceful shutdown proves materially less, because the
-stale-offset replay is exactly the behaviour under test.
+*(Tải 25 ops/s; chạy bình thường 20 s; giết worker và để chết 45 s; xả thêm 20 s.)*
 
-**Coverage proof** — every id committed at the source during the outage, found on its topic:
+Chế độ `kill` = **SIGKILL**, có chủ đích. `docker stop` gửi SIGTERM, cho Connect kịp flush offset
+trước khi tắt. Một lần tắt êm chứng minh được **ít hơn hẳn**, vì hành vi replay từ offset cũ chính là
+thứ cần test.
 
-| Captured table | id range written | rows | events on topic | missing | duplicates |
+**Chứng minh độ phủ:** mọi id đã commit ở nguồn trong lúc sập đều có mặt trên topic.
+
+| Bảng capture | dải id đã ghi | số dòng | event trên topic | missing | duplicates |
 |---|---|---|---|---|---|
 | `ecommerce_tx.orders` | 27000..28054 | 1,055 | 1,844 | **0** | 36 |
 | `ecommerce_tx.order_items` | 52728..54617 | 1,890 | 2,427 | **0** | 48 |
 | `ecommerce_tx.payments` | 23612..24282 | 671 | 879 | **0** | 20 |
 | `public.users` | 5614..5708 | 95 | 211 | **0** | 6 |
-| `public.products` | — | 0 | 222 | — | no inserts in window |
-| `public.categories` | — | 0 | 0 | — | no inserts in window |
-| `public.inventory` | — | — | 2,716 | — | no generated key (PK is a FK) |
+| `public.products` | — | 0 | 222 | — | không có insert trong cửa sổ |
+| `public.categories` | — | 0 | 0 | — | không có insert trong cửa sổ |
+| `public.inventory` | — | — | 2,716 | — | không có khoá tự sinh (PK là FK) |
 
-**Timings and offsets:**
+*(Số event trên topic nhiều hơn số dòng vì một dòng có thể được insert rồi update trong cửa sổ.
+Cột "duplicates" ở M2 sau này được đính chính, xem 5.6.)*
 
-| Measurement | Value |
+**Thời gian và offset:**
+
+| Đại lượng | Giá trị |
 |---|---|
-| operations sent while CDC was dead | 1,760 |
-| outage length | 45 s (SIGKILL) |
-| connectors report `RUNNING` after restart | 8.3 s |
-| writes continued into the recovery | 28.4 s |
-| **fully caught up after restart** | **30.3 s** (1.9 s after the last write) |
-| committed offset passes the kill point | 72.8 s after restart (flush interval is 60 s) |
-| MySQL offset, at kill → after | `mysql-bin.000007:1238339` → `:2399951` |
-| MySQL GTID, at kill → after | `…:1-61738` → `…:1-63546` (1,808 transactions) |
-| PostgreSQL offset, at kill → after | `lsn 70936688` → `lsn 72250344` |
-| slot during outage | `confirmed_flush` **FROZEN**; retained WAL 772,480 → 1,327,160 bytes |
-| total duplicate events | 110 |
+| số thao tác gửi khi CDC đang chết | 1,760 |
+| thời gian sập | 45 s (SIGKILL) |
+| connector báo `RUNNING` sau restart | 8.3 s |
+| việc ghi tiếp tục trong lúc hồi phục | 28.4 s |
+| **đuổi kịp hoàn toàn sau restart** | **30.3 s** (1.9 s sau lần ghi cuối) |
+| offset đã commit vượt qua điểm kill | 72.8 s sau restart (chu kỳ flush là 60 s) |
+| offset MySQL, lúc kill → sau | `mysql-bin.000007:1238339` → `:2399951` |
+| GTID MySQL, lúc kill → sau | `…:1-61738` → `…:1-63546` (1,808 transaction) |
+| offset PostgreSQL, lúc kill → sau | `lsn 70936688` → `lsn 72250344` |
+| slot trong lúc sập | `confirmed_flush` **ĐỨNG YÊN**; retained WAL 772,480 → 1,327,160 byte |
+| tổng duplicate event | 110 |
 
-**Verdict: PASS.** 4 tables proved gap-free across a SIGKILL of the worker.
+**Kết luận: PASS.** 4 bảng được chứng minh không có gap qua một lần SIGKILL worker.
 
-### 3.4 Experiment 2 — the WAL-accumulation guard
+### 4.4 Thí nghiệm 2: WAL-accumulation guard
 
 ```
 python mosaic.py wal-guard --idle 130
 ```
 
-Three phases, because the guard only means anything as a **contrast**: idle with the worker
-alive (the flush must advance — the heartbeat is what moves it), idle with the worker dead
-(it must freeze), then restart (it must recover). Showing only the first phase would show a
-number moving without showing what moves it.
+Có ba pha, vì guard chỉ có ý nghĩa khi **so sánh**:
+1. nhàn rỗi, worker sống: flush **phải tiến** (heartbeat là thứ đẩy nó);
+2. nhàn rỗi, worker chết: flush **phải đứng**;
+3. restart: flush **phải hồi phục**.
 
-The idle window must exceed the 60 s flush interval, or a frozen flush position demonstrates
-nothing but a timer that has not fired. The harness refuses to run if `--idle` is too small.
+Nếu chỉ chạy pha 1 thì chỉ thấy một con số đang chạy, chứ không thấy *cái gì* làm nó chạy.
 
-**Before the fix — FAIL.** 130 s idle with a *healthy* connector:
+Cửa sổ nhàn rỗi phải dài hơn chu kỳ flush 60 s, nếu không thì một vị trí flush đứng yên chỉ chứng
+minh được là đồng hồ chưa kịp điểm. Harness từ chối chạy nếu `--idle` quá nhỏ.
 
-| Sample | `confirmed_flush_lsn` | `current_wal_lsn` | retained WAL |
+**Trước khi sửa: FAIL.** 130 s nhàn rỗi với connector *khoẻ mạnh*:
+
+| Mẫu | `confirmed_flush_lsn` | `current_wal_lsn` | retained WAL |
 |---|---|---|---|
-| start | `0/40D3EA8` | `0/4175C28` | 2,216,816 |
-| +130 s | `0/40D3EA8` *(unchanged)* | `0/4176308` *(advanced)* | 2,218,576 |
+| bắt đầu | `0/40D3EA8` | `0/4175C28` | 2,216,816 |
+| +130 s | `0/40D3EA8` *(không đổi)* | `0/4176308` *(đã tiến)* | 2,218,576 |
 
-WAL advancing while the confirmed-flush position does not is precisely the unbounded-retention
-condition GR1 §4.4 says the heartbeat prevents.
+WAL tiến lên trong khi vị trí confirmed-flush đứng yên **chính là** tình trạng giữ WAL không giới
+hạn mà GR1 §4.4 nói heartbeat sẽ ngăn chặn.
 
-**After the fix — PASS:**
+**Sau khi sửa: PASS.**
 
-| Phase | Observation | Verdict |
+| Pha | Quan sát | Kết luận |
 |---|---|---|
-| idle, worker alive | `confirmed_flush` advanced **688,776 bytes** | ok |
-| idle, worker down | `confirmed_flush` advanced 0 bytes | frozen as expected |
-| after restart | `confirmed_flush` advanced 4,488 bytes | ok |
-| retained WAL now | **4,544 bytes** (was 704,880 before the fix) | bounded |
+| nhàn rỗi, worker sống | `confirmed_flush` tiến **688,776 byte** | ok |
+| nhàn rỗi, worker chết | `confirmed_flush` tiến 0 byte | đứng yên đúng như kỳ vọng |
+| sau restart | `confirmed_flush` tiến 4,488 byte | ok |
+| retained WAL hiện tại | **4,544 byte** (trước khi sửa là 704,880) | có giới hạn |
 
-| idle, connector **alive** | `confirmed_flush` advance over 130 s |
+| nhàn rỗi, connector **sống** | mức tiến `confirmed_flush` trong 130 s |
 |---|---|
-| heartbeat table outside the publication | **0 bytes** |
-| heartbeat table published *(the fix)* | **688,776 bytes** |
+| bảng heartbeat nằm ngoài publication | **0 byte** |
+| bảng heartbeat được publish *(bản sửa)* | **688,776 byte** |
 
-**One honest caveat the harness now prints itself.** Retained WAL did *not* grow during the
-outage phase, and that is correct rather than a weak result: the heartbeat's `INSERT` is
-issued **by the connector**, so killing the worker also stops the only writer and the database
-goes genuinely idle. The guard protects an idle capture set beside a *busy* database — which
-is what phase 1 measures. It cannot protect anything while the consumer is down.
+**Một lưu ý trung thực mà harness giờ tự in ra.** Retained WAL *không* tăng trong pha sập, và đó là
+đúng chứ không phải kết quả yếu. Câu `INSERT` heartbeat **do chính connector phát ra**, nên kill
+worker là dừng luôn người ghi duy nhất, và database trở nên nhàn rỗi thật sự. Guard bảo vệ trường
+hợp *tập bảng capture nhàn rỗi bên cạnh một database bận rộn* (pha 1 đo đúng trường hợp đó). Guard
+**không thể bảo vệ gì khi chính consumer đang chết**.
 
-### 3.5 Findings produced by M2
+### 4.5 Phát hiện của M2
 
-Both belong in CHANGES-FROM-GR1 Part A and in the GR2 report.
+Cả hai thuộc CHANGES-FROM-GR1 Part A và nên vào báo cáo GR2.
 
-#### A8 — Restart safety is at-least-once with a replay window, not exactly-once
+#### A8: Restart safety là at-least-once kèm cửa sổ replay, không phải exactly-once
 
-GR1 Table 4.3 states restart safety in one line: *"offset stored in the Kafka Connect offsets
-topic"*. True, and not the whole story. **Connect flushes source offsets on a timer** —
-`offset.flush.interval.ms = 60000` on this worker, which is the Connect default. The stored
-offset therefore trails the last produced record by up to a minute, and a crash replays
-everything committed since.
+GR1 Table 4.3 mô tả restart safety bằng một dòng: *"offset stored in the Kafka Connect offsets
+topic"*. Câu đó đúng nhưng chưa đủ. **Connect flush source offset theo đồng hồ**:
+`offset.flush.interval.ms = 60000`, mặc định của Connect. Vì vậy offset đã lưu chậm hơn record cuối
+cùng đã phát tới một phút, và một lần sập sẽ phát lại mọi thứ đã commit kể từ đó.
 
-Measured: **110 duplicate events** across one 45 s SIGKILL, and **zero** missing rows. The
-replay window is bounded by the flush interval, not by the length of the outage — a 5-second
-crash and a 5-minute crash replay the same ~60 s of work.
+Đo được: **110 duplicate event** qua một lần SIGKILL 45 s, và **0** dòng bị mất. Cửa sổ replay bị
+chặn bởi chu kỳ flush, **không phải bởi độ dài lần sập**: sập 5 giây hay 5 phút thì cũng phát lại
+khoảng 60 s công việc như nhau.
 
-*Why it matters for the report:* a harness that scored duplicates as failure would report a
-false negative on a mechanism working exactly as designed. Downstream, it is also the reason
-GR1 §4.2's "deduplicate using the source offset as an idempotency key" is load-bearing rather
-than decorative — M3's Bronze layer must actually implement it.
+*Vì sao quan trọng cho báo cáo:* một harness chấm trùng lặp là thất bại sẽ báo **false negative**
+cho một cơ chế đang chạy đúng thiết kế. Phía downstream, đây cũng là lý do câu của GR1 §4.2
+*"deduplicate using the source offset as an idempotency key"* là **bắt buộc** chứ không phải trang
+trí, và Bronze của M3 phải thực sự implement nó.
 
-#### A9 — GR1 §4.4's WAL-bloat guard was inert as configured
+#### A9: WAL-bloat guard của GR1 §4.4 không có tác dụng với cấu hình như viết
 
-The heartbeat was firing correctly (503 rows in `cdc_heartbeat`, 503 messages on
-`__debezium-heartbeat.mosaic.postgres`) and it still did not advance `confirmed_flush_lsn`,
-because **`heartbeat.action.query` wrote to a table outside the publication**. `pgoutput`
-decodes only *published* tables, so the heartbeat's WAL was never turned into a change event,
-Debezium never gained a new LSN to confirm, and the flush position stood still while WAL
-accumulated.
+Heartbeat vẫn bắn đúng (503 dòng trong `cdc_heartbeat`, 503 message trên
+`__debezium-heartbeat.mosaic.postgres`) nhưng **không đẩy được `confirmed_flush_lsn`**, vì
+**`heartbeat.action.query` ghi vào một bảng nằm ngoài publication**. `pgoutput` chỉ giải mã bảng
+*đã publish*, nên WAL của heartbeat không bao giờ thành change event, Debezium không có LSN mới để xác
+nhận, và vị trí flush đứng im trong khi WAL tích tụ.
 
-The fix is one table in two places — `mosaic_pub` and `table.include.list`. The effect is
-0 bytes → 688,776 bytes of flush advance over the same 130 s idle window.
+Bản sửa là thêm một bảng vào hai chỗ: `mosaic_pub` và `table.include.list`. Hiệu quả: từ 0 byte lên
+688,776 byte flush trong cùng cửa sổ 130 s.
 
-*Why it matters for the report:* this is the same **shape** as finding A6 (PostgreSQL emits no
-before image under the default replica identity) — a mitigation GR1 names in prose, which is
-silently ineffective until something measures it. Neither failure produces an error, a warning,
-or a log line. Both were found only by building the measurement. That is a defensible answer to
-*"what did the implementation phase actually contribute?"*
+*Vì sao quan trọng:* đây là **cùng một dạng** với A6. Cả hai là biện pháp mà GR1 nêu trong văn xuôi
+nhưng **âm thầm vô hiệu** cho tới khi có thứ gì đó đo nó. Không cái nào sinh ra lỗi, cảnh báo hay
+dòng log. Cả hai chỉ được phát hiện nhờ xây phép đo. Đó là một câu trả lời đứng vững cho câu hỏi
+*"giai đoạn implement thực sự đóng góp gì?"*
 
-### 3.6 Defects found in this session's own harness
+### 4.6 Lỗi tìm thấy trong chính harness của phiên này
 
-Recorded because this project has been bitten three times by measurement bugs that reported
-success (a false "all healthy" from `docker compose ps`; a load generator quoting its send
-rate; a `--from-beginning` topic sample making a before-image check pass vacuously). These are
-the M2 additions to that list, all caught before the milestone was called done.
+Ghi lại vì dự án này đã ba lần bị "cắn" bởi lỗi đo lường báo thành công giả: `docker compose ps` báo
+sai "all healthy"; load generator báo tốc độ gửi; mẫu topic `--from-beginning` khiến phép kiểm
+before-image pass vô nghĩa. Đây là phần M2 bổ sung vào danh sách đó, và tất cả đều được bắt **trước**
+khi milestone được tuyên bố xong.
 
-| # | Defect | Symptom | Fix |
+| # | Lỗi | Triệu chứng | Sửa |
 |---|---|---|---|
-| 1 | Committed offset read **inside its own flush window** | Printed `at kill:` and `after:` as identical, so the headline evidence line proved nothing while looking like a result. A later manual probe showed the offset *had* advanced. | Poll until the offset passes the kill point and **report how long that took** — the wait became the measurement (30.4 s on the passing run) |
-| 2 | Fixed sleep of one flush interval (the first attempt at fixing #1) | Still read too early: the flush landed ~97 s after restart on one run, not the ~60 s the interval alone suggests | Replaced with the poll above |
-| 3 | `query_rows(sep="|")` for PostgreSQL | `PostgresSession` reads with `-F "\t"`, so every row would have parsed as a single field and both the slot sample and the key-column derivation would have silently returned nothing | Use the default tab separator |
-| 4 | Idleness check counted the heartbeat table | Once `cdc_heartbeat` became captured (the A9 fix), its own writes would have been flagged as contamination and failed every `wal-guard` run | Exclude the relation named by `heartbeat.action.query`, parsed from the declared config |
-| 5 | Verdict did not require the offset to move | A worker that came back and consumed nothing would still have passed: topics quiet, no id missing from the bracketed window | `_offset_progressed()` added to the pass condition |
-| 6 | **The A9 fix broke the recovery metric.** Once `cdc_heartbeat` was captured, its topic gained an event every 10 s *forever*, and the quiescence detector watched every topic | One run reported **214.59 s** of "recovery" — the harness waiting on a heartbeat it had itself put into the capture set. The real figure was ~30 s | Drain only the workload's topics; exclude the relation named by `heartbeat.action.query` |
-| 7 | Offset advance timed from the *poll's* start, not the restart | Printed "committed offset caught up **0.03 s** after the restart" — the poll began after a 214 s drain, by which time the offset had long since moved. Meaningless, and flattering | Poll the offset *inside* the drain loop and time both from `t_restart`. Now reports 72.8 s, consistent with a 60 s flush interval |
+| 1 | Đọc offset đã commit **ngay trong cửa sổ flush của nó** | In `at kill:` và `after:` giống hệt nhau, nên dòng bằng chứng chính không chứng minh gì mà trông như một kết quả. Thăm dò tay sau đó cho thấy offset *đã* tiến | Poll tới khi offset vượt điểm kill và **báo mất bao lâu**: thời gian chờ trở thành phép đo (30.4 s ở lần pass) |
+| 2 | Ngủ cố định đúng một chu kỳ flush (lần sửa đầu cho #1) | Vẫn đọc quá sớm: có lần flush rơi vào ~97 s sau restart chứ không phải ~60 s như chu kỳ gợi ý | Thay bằng cách poll ở trên |
+| 3 | `query_rows(sep="|")` cho PostgreSQL | `PostgresSession` đọc với `-F "\t"`, nên mọi dòng sẽ bị parse thành một field duy nhất, và cả mẫu slot lẫn việc suy ra cột khoá đều âm thầm trả về rỗng | Dùng separator tab mặc định |
+| 4 | Check "nhàn rỗi" đếm cả bảng heartbeat | Khi `cdc_heartbeat` đã được capture (bản sửa A9), chính các lần ghi của nó bị coi là "nhiễm" và làm fail mọi lần `wal-guard` | Loại bảng được nêu trong `heartbeat.action.query`, parse từ config đã khai báo |
+| 5 | Kết luận không yêu cầu offset phải di chuyển | Một worker sống lại mà không tiêu thụ gì vẫn sẽ pass: topic im lặng, không id nào thiếu trong dải đã khoanh | Thêm `_offset_progressed()` vào điều kiện pass |
+| 6 | **Bản sửa A9 làm hỏng metric hồi phục.** Khi `cdc_heartbeat` được capture, topic của nó có một event mỗi 10 s *mãi mãi*, mà bộ phát hiện "đứng yên" lại theo dõi mọi topic | Một lần chạy báo **214.59 s** "recovery", tức harness ngồi đợi một heartbeat do chính nó đưa vào tập capture. Con số thật là ~30 s | Chỉ xả các topic của workload; loại bảng của `heartbeat.action.query` |
+| 7 | Tính thời gian offset tiến từ lúc *bắt đầu poll* chứ không từ lúc restart | In "committed offset caught up **0.03 s** after the restart". Poll bắt đầu sau 214 s xả, lúc đó offset đã tiến từ lâu. Vô nghĩa, và còn tô đẹp kết quả | Poll offset *bên trong* vòng xả và tính cả hai từ `t_restart`. Giờ báo 72.8 s, khớp với chu kỳ flush 60 s |
 
 ---
 
-## 4. Environment facts established
+## 5. M3 — Medallion on Iceberg
 
-Additions to CLAUDE.md's gotcha list, each costing at least one failed or misleading run.
+**Đóng:** 2026-10-05 · **Ghi chép trực tiếp:** mọi số bên dưới do một lệnh chạy hôm đó sinh ra, tái
+hiện được từ `experiments/results/{bronze,lakehouse,restart,snapshot}_events.jsonl`.
 
-| Fact | Consequence |
+### 5.1 Mục tiêu
+
+Xây ba tầng medallion trên Iceberg:
+- **Bronze**: Spark Structured Streaming đọc mọi topic Debezium, giữ nguyên envelope, **exactly-once**
+  dù Kafka giao at-least-once.
+- **Silver**: dbt-trino, một bảng "trạng thái hiện tại" cho mỗi bảng nguồn, **khớp nguồn sống từng
+  dòng**.
+- **Gold**: dbt-trino, các bảng tổng hợp theo GR1 §4.3, có test chất lượng (thay Great Expectations).
+- Đo KPI **end-to-end latency** của GR1 Table 4.4.
+
+### 5.2 Giai đoạn 1 (2026-09-12..23): hạ tầng và đường ghi
+
+*(Ghi trong bảng verified của STATUS.md lúc đó; tóm tắt lại ở đây.)*
+
+| Đầu việc | Output |
 |---|---|
-| `offset.flush.interval.ms = 60000` on this worker | never read a committed offset within ~60 s of a restart and call it evidence |
-| MySQL here is **8.0.46** → `SHOW MASTER STATUS` | `SHOW BINARY LOG STATUS` is the 8.4 spelling and is a syntax error |
-| `kafka-get-offsets.sh` has **no** `--topic-list` in this build | use `--topic-partitions a,b,c` — one exec for all topics, which is what makes a 2 s poll affordable |
-| `PostgresSession` reads with `-F "\t"` | `query_rows()` on PG must use the default tab separator, not `|` |
-| Debezium `heartbeat.action.query` only helps if its table is **captured** | otherwise the WAL guard is inert and silent (finding A9) |
-| The heartbeat's writer **is the connector** | killing the worker stops the heartbeat too, so an outage phase shows no WAL growth on an otherwise-idle database |
-| Docker Desktop stopping takes the whole stack with it | happened mid-session; named volumes survived, `up` restores |
+| Image Spark có sẵn jar, pin bản Iceberg trùng với bản Trino dùng | `docker/spark/` → `mosaic/spark:3.5.1-iceberg1.5.2` |
+| Cho Nessie lưu bền (RocksDB trên volume `nessie-data`), sống qua restart | compose |
+| Hai smoke test đường ghi (Spark ghi Iceberg, Trino đọc được và ngược lại) | — |
+| Bronze job, **trừ** idempotency key (để `NotImplementedError`) | `pipelines/bronze/bronze_stream.py` |
+| Phát hiện **A10 lần 1** (2026-09-12): topic `categories` đã bị retention xoá sạch | CHANGES-FROM-GR1 A10 |
 
----
+### 5.3 Giai đoạn 2 (2026-10-05): đầu việc đã xây
 
-## 5. Command reference added so far
-
-| Command | Milestone | Purpose |
-|---|---|---|
-| `python mosaic.py doctor` | M0 | one-shot state report |
-| `python mosaic.py up / down / clean` | M0 | lifecycle; `up` waits for **healthy** |
-| `python mosaic.py check-ports` | M0 | host port collisions, with owners |
-| `python mosaic.py check-abstraction` | M0 | the L3 domain-purity gate |
-| `python mosaic.py generate` / `python -m tools.seed.load` | M1 | corpus generation and bulk load |
-| `python mosaic.py connectors` | M1 | register Debezium connectors for a domain |
-| `python mosaic.py cdc-verify [--require-update]` | M1 | masking/envelope proof on the topics |
-| `python mosaic.py loadgen --rate N --duration S` | M1 | continuous OLTP writes |
-| `python mosaic.py stockout / restock` | M1 | the L0 failure lever |
-| **`python mosaic.py restart-safety [--mode kill\|stop\|pause]`** | **M2** | **kill Connect under load, prove no gap** |
-| **`python mosaic.py wal-guard [--idle N]`** | **M2** | **heartbeat / WAL-accumulation guard** |
-| **`python mosaic.py resnapshot`** | **M3** | **BLOCKING ad-hoc snapshot, verified against source row counts** |
-| **`python mosaic.py bronze`** | **M3** | **Bronze stream liveness, backlog, last batch** |
-| **`python mosaic.py bronze-verify exactly-once\|replay\|latency`** | **M3** | **the Bronze proofs and the end-to-end KPI** |
-| **`python mosaic.py dbt [-- args]`** | **M3** | **Silver + Gold (assemble, then dbt)** |
-| **`python -m tools.lakehouse.reconcile`** | **M3** | **Silver == live sources, row by row** |
-
----
-
-## 6. GR1 Table 4.4 KPI coverage
-
-GR1 defines five CDC key performance indicators to be measured "once the pipeline is
-implemented in GR2". Two are now measured.
-
-| KPI | State | Value / blocker |
-|---|---|---|
-| **End-to-end latency (source commit → Iceberg Bronze)** | **measured (M3)** | p50 **7.8 s** MySQL / **8.0 s** PostgreSQL, p99 12.3 / 12.9 s; capture p50 0.26 / 0.49 s, the rest is the 10 s trigger |
-| Throughput under sustained load | partially (M1) | ~100 ops/s sustained, bounded by per-commit fsync under Docker Desktop |
-| **Restart recovery time** | **measured (M2)** | **30.3 s** to fully caught up after a 45 s SIGKILL, with writes continuing 28.4 s into recovery |
-| DDL handling (`ALTER TABLE` downstream impact) | not started | limitation recorded in ADR 0005 (`schemas.enable=false` hides pure type changes) |
-| **WAL lag (PostgreSQL only)** | **measured (M2)** | frozen flush + growing WAL reproduced on demand; guard fixed and re-measured (0 → 688,776 bytes) |
-
----
-
-## 7. What is not verified
-
-Stated explicitly, per this project's reporting rule.
-
-- **The DDL fix is applied to the running database by hand** (`ALTER PUBLICATION`). The edit
-  to `domains/ecommerce/ddl/postgres.sql` only takes effect on a fresh volume — the same
-  retroactivity caveat CLAUDE.md records for `REPLICA IDENTITY FULL`.
-- ~~M3 is recon-complete but unexecuted.~~ *Superseded 2026-10-05:* M3 ran and is verified;
-  what M3 left unverified is listed in §9.7.
-- The `gov`, `orch` and `console` profiles have still never been started.
-- Everything remains at `small` scale (~86k seeded rows plus load-generator growth).
-
----
-
-## 8. Run ledgers
-
-Machine-readable, append-only, one JSON object per line. These are what E1–E4 read back.
-
-| File | Written by | Contents |
-|---|---|---|
-| `experiments/results/stockout_events.jsonl` | `stockout` / `restock` / `loadgen` | every stock-out (organic or manual) with its source commit timestamp |
-| `experiments/results/restart_events.jsonl` | `restart-safety` / `wal-guard` | per-run verdict, gap and duplicate counts, all timings, offsets at kill and after, and the full replication-slot sample series; since M3 also per-table key ranges |
-| `experiments/results/snapshot_events.jsonl` | `resnapshot` | per-table op=r counts vs source rows |
-| `experiments/results/bronze_events.jsonl` | `bronze-verify` | exactly-once, Spark-replay and latency runs |
-| `experiments/results/lakehouse_events.jsonl` | `tools.lakehouse.reconcile` | per-table missing / extra / differing counts |
-
-As at 2026-09-08 the restart ledger holds 5 entries: 3 `restart-safety` (pass, inconclusive,
-pass) and 2 `wal-guard` (fail, pass). **The failures are kept deliberately.** The
-`wal-guard` fail/pass pair *is* the evidence for finding A9, and the `inconclusive` entry is
-the run that exposed harness defect #1 in §3.6.
-
-
----
-
-## 9. M3 — Medallion on Iceberg
-
-**Closed 2026-10-05. First-hand:** every number below was produced by a command run that day
-and is reproducible from `experiments/results/{bronze,lakehouse,restart,snapshot}_events.jsonl`.
-Earlier M3 work (2026-09-12..23: the Spark image, Nessie persistence, the two write-path smoke
-tests, the Bronze job minus its key) is recorded in STATUS.md's verified table.
-
-### 9.1 What was built
-
-| Piece | What it does |
+| Thành phần | Làm gì |
 |---|---|
-| `idempotency_key()` in `bronze_stream.py` | SHA-256 over `to_json(struct(topic, op, record_key, source.file/pos/row/lsn/txId/ts_ms, before, after))` -- the last piece the Bronze stream was blocked on |
-| `_ingest_ts` as a per-batch literal | replaces `current_timestamp()`: stable even if a cached partition is recomputed, and stamped into the snapshot summary as `mosaic.ingest_ts_us` so each row joins to the snapshot that published it |
-| `--reset-checkpoint` renames | the checkpoint is set aside, never deleted |
-| `tools/bronze/verify.py` | `exactly-once` (Connect replay), `replay` (Spark replay), `latency` (Table 4.4 KPI) |
-| `tools/cdc/restart.py` changes | duplicates = identical source events; per-table key ranges written to the ledger |
-| `pipelines/transform/` | domain-free dbt project: `assemble.py` (Silver generator + Gold copier), `cdc_current_state` macro, Bronze source with freshness, schema-name rule |
+| `idempotency_key()` trong `bronze_stream.py` | SHA-256 trên `to_json(struct(topic, op, record_key, source.file/pos/row/lsn/txId/ts_ms, before, after))`. Đây là mảnh cuối cùng Bronze stream còn thiếu |
+| `_ingest_ts` là hằng số theo từng batch | thay cho `current_timestamp()`: ổn định kể cả khi một partition đã cache bị tính lại, và được đóng dấu vào snapshot summary dưới tên `mosaic.ingest_ts_us`, để mỗi dòng nối được với snapshot đã publish nó |
+| `--reset-checkpoint` đổi tên | checkpoint được cất sang chỗ khác, không bao giờ bị xoá |
+| `tools/bronze/verify.py` | `exactly-once` (replay phía Connect), `replay` (replay phía Spark), `latency` (KPI Table 4.4) |
+| Sửa `tools/cdc/restart.py` | duplicates = các source event **giống hệt nhau**; ghi dải key từng bảng vào ledger |
+| `pipelines/transform/` | dbt project không chứa domain: `assemble.py` (sinh Silver + chép Gold), macro `cdc_current_state`, source Bronze có freshness, quy tắc đặt tên schema |
 | `domains/ecommerce/gold/` | `orders`, `users`, `product_sales`, `user_category_affinity` + tests |
-| `docker/dbt/`, compose `dbt` service | dbt-core 1.8.8 + dbt-trino 1.8.3, profile `transform` |
-| `tools/lakehouse/reconcile.py` | Silver vs the live sources through Trino federation |
-| `tools/trino.py` | stdlib Trino REST client |
+| `docker/dbt/`, service compose `dbt` | dbt-core 1.8.8 + dbt-trino 1.8.3, profile `transform` |
+| `tools/lakehouse/reconcile.py` | so Silver với nguồn sống qua Trino federation |
+| `tools/trino.py` | Trino REST client chỉ dùng thư viện chuẩn |
+| `tools/cdc/snapshot.py` | ad-hoc BLOCKING snapshot (`resnapshot`) |
 
-### 9.2 The process, step by step
+### 5.4 Quy trình từng bước (2026-10-05)
 
-1. **State on arrival.** Whole stack `Exited (255)` for 10 days (a Docker Desktop restart).
-   `mosaic-spark` had last run on 2026-09-23 and exited 1 on the `NotImplementedError` of the
-   unwritten key -- after reaching Nessie, creating the table and subscribing to 8 topics, so the
-   plumbing itself was already proven.
-2. **Key written; `up`.** Spark failed on its first batch: `Cannot fetch offset 2278 ...
-   cdc_heartbeat ... Some data may have been lost`. Kafka: **every table topic had earliest ==
-   latest** -- retention had deleted all of it while the stack was down (finding A10, second
-   occurrence). Bronze: 0 rows, 0 snapshots, so the checkpoint (`offsets/0..1`, `commits/0`) held
-   nothing worth keeping. A delete of it was declined by the session's permission policy; it was
-   **renamed** to `bronze.stale-2026-09-23` instead, and `--reset-checkpoint` was changed to do
-   the same.
-3. **Stream healthy** at 04:20:35 UTC. `resnapshot`: all 7 tables re-emitted exactly their source
-   row counts, **114,709 op=r in 40.4 s**. Bronze drained to backlog 0; checked through *Trino*
-   (the other engine): per table `n = distinct keys = distinct event_id = source rows`.
-4. **Connect replay.** `restart-safety --mode kill`: PASS, 0 missing, **183 replayed events**.
-   Then `bronze-verify exactly-once` (9.3).
-5. **Spark replay**, twice (9.3). **Latency** (9.4).
-6. **dbt, first build:** 4 PostgreSQL Silver tables built and passed every test; the 3 MySQL ones
-   failed with `integer overflow` -- Trino's `date_add` narrows its amount to 32 bits, and epoch
-   millis do not fit. Rewritten on `from_unixtime_nanos`.
-7. **Second build:** all Silver fine, PostgreSQL ones now through the incremental MERGE path;
-   `gold.orders` failed `ICEBERG_TOO_MANY_OPEN_PARTITIONS (174 > 100)` under GR1 §4.3's partition
-   spec. Writer cap raised to 5000, Trino restarted. **Third build: 78/78.**
-8. **Reconcile** on the freshly built Silver: exact. **Negative control** with the wrong source
-   zone: every MySQL row differs.
-9. **MERGE under load:** `loadgen --rate 25 --duration 240` in the background, three `dbt build`s
-   during it, one `stockout`. Then quiesce, final build, reconcile: exact (9.5).
+1. **Trạng thái khi bắt đầu.** Cả stack `Exited (255)` đã 10 ngày (do Docker Desktop restart).
+   `mosaic-spark` chạy lần cuối ngày 2026-09-23 và thoát với mã 1 vì `NotImplementedError` của cái
+   key chưa viết. Nhưng nó đã kịp kết nối Nessie, tạo bảng và subscribe 8 topic, nên **phần ống nối
+   đã được chứng minh từ trước**.
+2. **Viết key; `up`.** Spark lỗi ngay batch đầu: `Cannot fetch offset 2278 ... cdc_heartbeat ... Some
+   data may have been lost`. Kiểm Kafka: **mọi topic bảng có earliest == latest**, tức retention đã
+   xoá hết khi stack đang tắt (**A10 lần 2**). Bronze: 0 dòng, 0 snapshot, nên checkpoint
+   (`offsets/0..1`, `commits/0`) không chứa gì đáng giữ. Lệnh xoá checkpoint bị permission policy của
+   phiên từ chối, nên checkpoint được **đổi tên** thành `bronze.stale-2026-09-23`, và
+   `--reset-checkpoint` được sửa để cũng làm như vậy.
+3. **Stream khoẻ** lúc 04:20:35 UTC. `resnapshot`: cả 7 bảng phát lại đúng số dòng ở nguồn,
+   **114,709 `op=r` trong 40.4 s**. Bronze xả về backlog 0; kiểm bằng *Trino* (engine khác với engine
+   đã ghi): với mỗi bảng, `n = distinct keys = distinct event_id = source rows`.
+4. **Replay phía Connect.** `restart-safety --mode kill`: PASS, 0 missing, **183 replayed events**.
+   Sau đó `bronze-verify exactly-once` (5.5).
+5. **Replay phía Spark** hai lần (5.5). **Latency** (5.6).
+6. **dbt, build đầu tiên:** 4 bảng Silver nguồn PostgreSQL build xong và pass mọi test; 3 bảng nguồn
+   MySQL lỗi `integer overflow`, vì `date_add` của Trino ép tham số về số nguyên 32-bit mà epoch
+   millis không vừa. Viết lại dùng `from_unixtime_nanos`.
+7. **Build thứ hai:** Silver ổn, các bảng PostgreSQL giờ đi qua nhánh MERGE incremental. `gold.orders`
+   lỗi `ICEBERG_TOO_MANY_OPEN_PARTITIONS (174 > 100)` vì partition spec của GR1 §4.3. Nâng giới hạn
+   writer lên 5000, restart Trino. **Build thứ ba: 78/78.**
+8. **Reconcile** trên Silver vừa build: khớp tuyệt đối. **Negative control** với múi giờ nguồn sai:
+   mọi dòng MySQL đều khác.
+9. **MERGE dưới tải:** `loadgen --rate 25 --duration 240` chạy nền, ba lần `dbt build` trong lúc đó,
+   một lần `stockout`. Rồi cho hệ đứng yên, build lần cuối, reconcile: khớp tuyệt đối (5.7).
 
-### 9.3 Bronze exactly-once
+### 5.5 Bronze exactly-once
 
-**Connect side** -- `bronze-verify exactly-once` against the 04:32 UTC restart-safety run:
+**Phía Connect**: `bronze-verify exactly-once` trên lần chạy restart-safety lúc 04:32 UTC:
 
-| Table | keys written in the outage window | insert events on Kafka | Bronze `op=c` rows | distinct |
+| Bảng | key ghi trong cửa sổ sập | insert event trên Kafka | dòng `op=c` ở Bronze | distinct |
 |---|---|---|---|---|
 | `ecommerce_tx.orders` | 28405..29492 (1,088) | 1,107 | 1,088 | 1,088 |
 | `ecommerce_tx.order_items` | 55258..57237 (1,980) | 2,010 | 1,980 | 1,980 |
 | `ecommerce_tx.payments` | 24491..25209 (719) | 724 | 719 | 719 |
 | `public.users` | 5722..5816 (95) | 95 | 95 | 95 |
 
-Independent of Bronze's own key on purpose: an insert happens once at the source, so a second
-`op=c` for a key can only be a replay, and a missing one only a gap.
+Phép kiểm này **cố ý độc lập** với key của chính Bronze: một insert chỉ xảy ra một lần ở nguồn, nên
+`op=c` thứ hai cho cùng một key chỉ có thể là replay, và thiếu một cái chỉ có thể là gap.
 
-**Spark side** -- `bronze-verify replay` (SIGKILL the stream under 20 ops/s, ~30 s outage):
+**Phía Spark**: `bronze-verify replay` (SIGKILL stream dưới tải 20 ops/s, sập ~30 s):
 
-| Run | Crash landed | Re-run of the in-flight batch | Window check |
+| Lần | Thời điểm sập | Chạy lại batch đang dở | Kiểm cửa sổ |
 |---|---|---|---|
-| 1 | mid-batch 70, nothing committed | 2,987 in, 2,987 written | 624 / 1,137 / 440 / 70 inserts, all exact |
-| 2 | **after batch 77's Iceberg commit, before its checkpoint commit** | **673 in, 0 written, 673 dropped**; still 1 snapshot for batch 77 | 536 / 1,033 / 371 / 46, all exact |
+| 1 | giữa batch 70, chưa commit gì | 2,987 vào, 2,987 ghi | 624 / 1,137 / 440 / 70 insert, đều chính xác |
+| 2 | **sau khi Iceberg commit batch 77, trước khi checkpoint commit** | **673 vào, 0 ghi, 673 bị bỏ**; vẫn 1 snapshot cho batch 77 | 536 / 1,033 / 371 / 46, đều chính xác |
 
-Run 2 is the case the Bronze docstring claimed to absorb and that a naive append would have
-duplicated -- it occurred naturally, so the tool's withheld-commit branch (written to force it)
-never fired. Spark's own log: `batch 77: 673 in, 673 written` -> restart -> `batch 77: 673 in,
-0 written, 673 duplicate(s) dropped`.
+Lần 2 là đúng trường hợp mà docstring của Bronze tuyên bố sẽ hấp thụ được, và một phép append ngây
+thơ thì sẽ ghi trùng. Nó **xảy ra tự nhiên**, nên nhánh withheld-commit của công cụ (viết ra để ép
+trường hợp này) chưa bao giờ phải kích hoạt. Log của Spark: `batch 77: 673 in, 673 written` →
+restart → `batch 77: 673 in, 0 written, 673 duplicate(s) dropped`.
 
-### 9.4 End-to-end latency (GR1 Table 4.4)
+### 5.6 End-to-end latency (GR1 Table 4.4)
 
-`bronze-verify latency`, 120 s at 20 ops/s (2,400 ops), trigger 10 s. Availability = commit time
-of the Iceberg snapshot that published the row (joined exactly via `_ingest_ts`); `op=r` excluded.
+`bronze-verify latency`, 120 s ở 20 ops/s (2,400 ops), trigger 10 s. "Khả dụng" = thời điểm commit
+của Iceberg snapshot đã publish dòng đó (nối chính xác qua `_ingest_ts`); loại các dòng `op=r`.
 
-| Source | events | p50 | p95 | p99 | max | capture p50 / p95 | landing p50 / p95 |
+| Nguồn | events | p50 | p95 | p99 | max | capture p50 / p95 | landing p50 / p95 |
 |---|---|---|---|---|---|---|---|
 | MySQL | 5,144 | 7.76 s | 11.66 | 12.29 | 13.21 | 0.26 / 0.48 | 7.50 / 11.37 |
 | PostgreSQL | 2,791 | 7.99 s | 12.03 | 12.91 | 13.51 | 0.49 / 0.87 | 7.50 / 11.51 |
 
-Capture = source commit -> Kafka record; landing = Kafka -> snapshot commit. Debezium is
-sub-second on both; the trigger interval dominates (uniform 0-10 s wait + ~2.5 s batch). The KPI
-is therefore tunable by `BRONZE_TRIGGER_SECONDS`, at the cost of more, smaller files.
+*Capture* = commit ở nguồn → record trên Kafka; *landing* = Kafka → snapshot commit. Debezium dưới
+1 giây ở cả hai nguồn; **trigger chiếm phần lớn** (thời gian chờ phân bố đều 0–10 s cộng khoảng 2.5 s
+xử lý batch). Vì vậy KPI này chỉnh được bằng `BRONZE_TRIGGER_SECONDS`, đánh đổi là sinh ra nhiều
+file nhỏ hơn.
 
-### 9.5 Silver and Gold
+**Đính chính A8 (phát hiện trong M3):** cột "duplicates" của M2 đếm *số event trên mỗi key vượt quá
+cái đầu tiên*, nên lẫn cả UPDATE hợp lệ (một order đi từ `pending → paid` là hai source event chứ
+không phải một event giao hai lần), và bỏ qua các bảng không có khoá tự sinh. M3 đổi metric thành
+"**cùng một source event được giao hơn một lần**", khớp theo op, vị trí nguồn, `source.ts_ms` và cả
+hai image. Lần chạy tương đương ở M3 đo được **183 replay trên sáu bảng** (54 là insert bị replay).
+Kết luận không đổi.
 
-Incremental MERGE row counts during and after the load test:
+### 5.7 Silver và Gold
+
+Số dòng được MERGE incremental trong và sau bài test tải:
 
 | Model | build 2 | build 3 | final |
 |---|---|---|---|
@@ -497,54 +535,198 @@ Incremental MERGE row counts during and after the load test:
 | `silver.order_items` / `payments` / `products` | | | 3,795 / 1,363 / 173 |
 | `gold.orders` | 577 | 660 | 2,621 |
 
-Build 1 merged 0 rows: it ran before the generator's first commits reached Bronze.
+Build 1 MERGE 0 dòng vì nó chạy trước khi các commit đầu tiên của generator tới được Bronze.
 
-**Reconcile, final (quiescent):** 0 missing / 0 extra / 0 differing in all 7 tables -- 36,678
+**Reconcile cuối cùng (lúc hệ đứng yên):** 0 missing / 0 extra / 0 differing ở cả 7 bảng (36,678
 orders, 70,056 items, 29,827 payments, 6,479 users, 1,000 products, 48 categories, 1,000
-inventory -- on every non-masked column (masked: `buyer_email`, `buyer_phone`, `email`, `phone`).
+inventory), trên mọi cột không bị mask (cột bị mask: `buyer_email`, `buyer_phone`, `email`,
+`phone`).
 
-**Gold vs live aggregates (ad hoc, federated):** `gold.orders` item lines, units and status vs
-MySQL: 36,678 orders, 0 missing / extra / differing. `product_sales.stock_qty` vs live
-`inventory`: 0 of 1,000 differ. During the load, product 68 hit stock 0 at the source at
-05:01:49; Bronze had it 2 s later; Silver/Gold still said 9 until the next build -- L0, observed.
+**Gold so với số tổng hợp sống (ad hoc, qua federation):** `gold.orders` (số dòng item, số đơn vị,
+status) so với MySQL: 36,678 orders, 0 missing/extra/differing. `product_sales.stock_qty` so với
+`inventory` sống: 0/1,000 khác.
 
-**Iceberg side effects:** `silver.orders` after 4 MERGEs: 4 data files, 5 position-delete files,
-785 position deletes (snapshot summary; Trino 451's `$files` does not list delete files).
-`gold.product_sales` kept 6 snapshots across builds (`CREATE OR REPLACE`). `SHOW STATS` after the
-ANALYZE post-hook: `order_id` NDV 36,678.
+**L0 quan sát được ngay trong stack:** trong lúc chạy tải, sản phẩm 68 về tồn kho 0 ở nguồn lúc
+05:01:49; Bronze có thông tin này 2 s sau; Silver/Gold vẫn ghi 9 cho tới lần build kế tiếp.
 
-**GR1 §4.3's partitioning, measured** (finding A12): `gold.orders` 2,944 partitions, 2,968 files,
-12.6 rows/file. `ANALYZE` 8.25 s vs 0.25 s on unpartitioned `silver.orders` (33x); full scan
-1.28 s vs 0.09 s (14x). GR1 Listing 4.2: 100 rows in 1.61 s.
+**Tác dụng phụ trên Iceberg:** `silver.orders` sau 4 lần MERGE có 4 data file, 5 position-delete
+file, 785 position delete (theo snapshot summary; `$files` của Trino 451 không liệt kê delete file).
+`gold.product_sales` giữ 6 snapshot qua các lần build (`CREATE OR REPLACE`). `SHOW STATS` sau
+ANALYZE post-hook: NDV của `order_id` là 36,678.
 
-### 9.6 Findings produced by M3
+**Đo partitioning của GR1 §4.3** (finding A12): `gold.orders` có 2,944 phân vùng, 2,968 file, 12.6
+dòng/file. `ANALYZE` mất 8.25 s so với 0.25 s trên `silver.orders` không phân vùng (33 lần); full
+scan 1.28 s so với 0.09 s (14 lần). GR1 Listing 4.2: 100 dòng trong 1.61 s.
 
-| # | Finding | Where |
+### 5.8 Phát hiện của M3
+
+| # | Phát hiện | Ở đâu |
 |---|---|---|
-| A10 | Kafka retention erased CDC history before Bronze could land it -- twice | CHANGES-FROM-GR1 |
-| A11 | MySQL `DATETIME` arrives 7 h off; harmonisation moves from an SMT to Silver | CHANGES-FROM-GR1 |
-| A12 | §4.3's `gold.orders` partitioning is sized for another scale | CHANGES-FROM-GR1 |
-| A8 correction | M2's duplicate count mixed replays with legitimate updates | CHANGES-FROM-GR1 A8 |
-| D15 | seed and load generator used different region vocabularies | CHANGES-FROM-GR1 |
-| -- | Trino cannot write snapshot-summary properties; `$files` hides delete files | STATUS finding 12 |
+| A10 | Kafka retention xoá lịch sử CDC trước khi Bronze kịp nạp, hai lần | CHANGES-FROM-GR1 |
+| A11 | MySQL `DATETIME` lệch 7 h; việc chuẩn hoá chuyển từ SMT sang Silver | CHANGES-FROM-GR1 |
+| A12 | Partitioning `gold.orders` của §4.3 được thiết kế cho quy mô khác | CHANGES-FROM-GR1 |
+| A8 (đính chính) | Đếm trùng của M2 lẫn replay với update hợp lệ | CHANGES-FROM-GR1 A8 |
+| D15 | Seed và load generator dùng hai bộ từ vựng vùng khác nhau | CHANGES-FROM-GR1 |
+| — | Trino không ghi được thuộc tính snapshot summary; `$files` giấu delete file | STATUS finding 12 |
+| — | Silver phải sắp theo vị trí nguồn, không theo thời gian | STATUS finding 17 |
 
-### 9.7 What M3 leaves unverified
+### 5.9 Lỗi tự bắt được trong M3
 
-- `bronze-verify replay`'s withheld-commit branch (never needed; see 9.3).
-- Iceberg maintenance -- no compaction, snapshot expiry or orphan cleanup exists yet.
-- No dbt schedule; Silver/Gold refresh only on `python mosaic.py dbt`.
-- Everything at `small` scale.
+1. **Metric trùng lặp của M2** (đính chính A8 ở trên). Phát hiện khi thiết kế phép kiểm Bronze, vì
+   phép chứng minh theo dải insert cần một con số có nghĩa là *replay*.
+2. **Một lời cảnh báo sai, bị chính dữ liệu bắt.** Công cụ latency ban đầu in rằng thời gian nguồn
+   MySQL chỉ có độ phân giải 1 giây, suy ra từ các dòng snapshot. Nhưng số capture mâu thuẫn với điều
+   đó (p50 0.26 s không thể tồn tại nếu bị cắt tới 1 s). Query Bronze cho thấy 19,029/19,045 insert
+   MySQL có thời gian dưới giây; chỉ các dòng `op=r` mới là giây chẵn. Cảnh báo được sửa trước khi
+   lọt vào bất kỳ tài liệu nào.
+3. **`decimal` qua REST.** Lần chạy latency đầu tiên crash khi in `max()`, vì giao thức REST của
+   Trino trả decimal dưới dạng chuỗi. Cast sang `double` trong SQL; lần chạy được **thực hiện lại**,
+   không vá kết quả cũ.
+4. **Giữ negative control trong ledger.** Dòng 2 của `lakehouse_events.jsonl` là lần chạy cố ý sai
+   múi giờ (`MISMATCH`). Đó là bằng chứng rằng phép reconcile *có thể* fail.
 
-### 9.8 Defects caught in this session's own work
+### 5.10 Những gì M3 còn để lại chưa kiểm chứng
 
-1. **M2's duplicate metric** (above, A8 correction) -- found while designing the Bronze check,
-   because the insert-range proof needed a count that meant *replays*.
-2. **A wrong caveat, caught by the data.** The latency tool first printed that MySQL source times
-   have one-second resolution, inferred from the snapshot rows. The capture figures contradicted
-   it (p50 0.26 s could not survive up to +1 s of truncation); querying Bronze showed 19,029 of
-   19,045 MySQL inserts with sub-second times -- only `op=r` rows are whole seconds. Caveat
-   corrected before it reached any document.
-3. **`decimal` over REST.** The first latency run crashed printing `max()`: Trino's REST protocol
-   returns decimals as strings. Cast to `double` in SQL; the run was repeated rather than patched.
-4. **Negative control kept in the ledger.** `lakehouse_events.jsonl` line 2 is the deliberate
-   wrong-zone run (`MISMATCH`); it is the evidence that the reconcile check can fail.
+- Nhánh withheld-commit của `bronze-verify replay` (chưa cần tới, xem 5.5).
+- Iceberg maintenance: chưa có compaction, snapshot expiry hay dọn orphan file.
+- Chưa có lịch dbt; Silver/Gold chỉ refresh khi chạy `python mosaic.py dbt`.
+- Mọi thứ ở quy mô `small`.
+
+---
+
+## 6. Sau M3 — giới hạn bộ nhớ Trino (2026-10-13/16)
+
+| Ngày | Việc | Kết quả |
+|---|---|---|
+| 2026-10-13 | Đo một lần build incremental **không thay đổi dòng nào** | vẫn tốn 45–61 s cho `gold.orders`; một câu lệnh quét 27,142 split cho 95 MiB. Đây là thứ đẩy heap Trino lên 6+ GiB (hệ quả của A12) |
+| 2026-10-13 | Chẩn đoán | Image Trino tự đặt heap bằng 80% bộ nhớ nó thấy (`MaxRAMPercentage=80`). Không có giới hạn container thì đó là 80% của cả Docker VM (12.3 GiB), và G1 cứ phình heap ra thay vì thu gom (6–7 GiB cho một live heap 0.4 GiB) |
+| 2026-10-16 | Sửa: `docker/trino/jvm.config` pin `-Xmx3G`; `mem_limit: 6g` làm chốt chặn; `MALLOC_ARENA_MAX=2` (glibc mặc định mở tới 128 arena trên 16 CPU) | Đỉnh `dbt build` incremental 6.20 → **2.59 GiB**; ghi 2,944 phân vùng 7.04 → **3.90 GiB**; đỉnh kernel 7.39 → **3.93 GiB**; 0 OOM; 78/78 pass. Riêng `MALLOC_ARENA_MAX`: off-heap 1.47 → 0.87 GiB |
+
+Bài học đo lường: phải nhìn **RSS hoặc `memory.peak`** của container, không nhìn memory pool của Trino.
+Pool chỉ đạt đỉnh 19 MiB trong khi container ngồi ở 6 GiB.
+
+---
+
+## 7. Deliverables: bản đồ file theo milestone
+
+Chỉ liệt kê file có thật trong cây thư mục.
+
+| Milestone | Path | Loại | Làm gì |
+|---|---|---|---|
+| M0 | `docker/compose.yaml` | stack | triển khai 10 service trên một máy, profile `gov`/`orch`/`console` |
+| M0 | `docker/trino/catalog/*.properties` | config | 4 catalog Trino: `iceberg` (Nessie), `mysql`, `postgresql`, `platform` |
+| M0 | `sql/platform.sql` | schema | `mosaic_platform`: 6 bảng `platform.*` không chứa domain (N1 + N3) |
+| M0 | `mosaic.py` | tooling | task runner (máy không có `make`) |
+| M0 | `docs/PROBLEM.md` | spec | cái thang trừu tượng L0–L3 |
+| M1 | `domains/ecommerce/ddl/{mysql,postgres}.sql` | schema | GR1 Appendix A, cộng `REPLICA IDENTITY FULL` (A6) |
+| M1 | `domains/ecommerce/connectors/*.json` | config | connector Debezium với masking native (ADR 0004) |
+| M1 | `tools/seed/` | tooling | sinh corpus tất định, có ngữ nghĩa thật + bulk loader |
+| M1 | `tools/loadgen/` | tooling | ghi OLTP liên tục + công tắc stock-out (tạo ra L0) |
+| M1 | `tools/cdc/verify.py` | tooling | chứng minh masking/envelope, kỳ vọng rút từ JSON connector |
+| M1 | `tools/dbsession.py` | tooling | phiên psql/mysql sống lâu qua `compose exec -T` |
+| **M2** | **`tools/cdc/restart.py`** | **tooling** | **harness restart-safety + WAL-guard (artifact chính của M2)** |
+| **M2** | **`experiments/results/restart_events.jsonl`** | **data** | **ledger máy đọc được của mọi lần chạy M2** |
+| **M3** | **`pipelines/bronze/bronze_stream.py`** | **pipeline** | **mọi topic Debezium → `iceberg.bronze.cdc_events`, envelope nguyên vẹn, có idempotency key** |
+| **M3** | **`docker/spark/`** | **image** | **`mosaic/spark:3.5.1-iceberg1.5.2`, jar có sẵn, Iceberg pin trùng bản của Trino** |
+| **M3** | **`pipelines/transform/`** | **dbt project** | **không chứa domain: `assemble.py` sinh Silver, macro `cdc_current_state`, source Bronze** |
+| **M3** | **`domains/ecommerce/gold/`** | **models** | **4 model Gold + tests, gồm các check chéo nguồn của GR1 §4.3** |
+| **M3** | **`docker/dbt/`** | **image** | **`mosaic/dbt:1.8` (dbt-core 1.8.8, dbt-trino 1.8.3)** |
+| **M3** | **`tools/bronze/verify.py`** | **tooling** | **Bronze exactly-once (cả hai nguồn replay) + latency commit→Bronze** |
+| **M3** | **`tools/lakehouse/reconcile.py`** | **tooling** | **Silver so với nguồn sống từng dòng** |
+| **M3** | **`tools/cdc/snapshot.py`, `tools/trino.py`** | **tooling** | **BLOCKING snapshot theo yêu cầu; Trino REST client thư viện chuẩn** |
+| sau M3 | `docker/trino/jvm.config` | config | giới hạn heap Trino `-Xmx3G` |
+
+---
+
+## 8. Environment facts đã xác lập
+
+Bổ sung vào danh sách gotcha của CLAUDE.md. Mỗi dòng đã tốn ít nhất một lần chạy hỏng hoặc gây hiểu
+nhầm.
+
+| Sự thật | Hệ quả |
+|---|---|
+| `offset.flush.interval.ms = 60000` trên worker này | không bao giờ đọc offset đã commit trong ~60 s sau restart rồi coi là bằng chứng |
+| MySQL ở đây là **8.0.46** → `SHOW MASTER STATUS` | `SHOW BINARY LOG STATUS` là cú pháp 8.4, báo lỗi cú pháp |
+| `kafka-get-offsets.sh` **không có** `--topic-list` trong bản này | dùng `--topic-partitions a,b,c`: một lần exec cho mọi topic, nhờ vậy mới poll mỗi 2 s được |
+| `PostgresSession` đọc với `-F "\t"` | `query_rows()` trên PG phải dùng separator tab mặc định, không dùng `|` |
+| `heartbeat.action.query` của Debezium chỉ có ích nếu bảng của nó **được capture** | nếu không thì WAL guard vô hiệu và im lặng (A9) |
+| Người ghi heartbeat **chính là connector** | kill worker là dừng luôn heartbeat, nên pha sập không thấy WAL tăng trên database đang nhàn rỗi |
+| Docker Desktop dừng thì cả stack dừng | xảy ra giữa phiên; named volume còn nguyên, `up` là khôi phục |
+| Stack dừng quá 7 ngày thì quay lại với topic CDC rỗng | Kafka retention chạy theo giờ thật ngay khi broker khởi động (A10) |
+| `date_add` của Trino ép tham số về int 32-bit | dùng `from_unixtime_nanos(ms * 1000000)` |
+| REST của Trino trả `decimal` dạng chuỗi | cast sang `double` trong SQL |
+| Trino giới hạn 100 partition writer | nâng lên 5000 cho `gold.orders` (D14) |
+| Image Trino lấy heap = 80% bộ nhớ nhìn thấy | pin `-Xmx3G` + `mem_limit` + `MALLOC_ARENA_MAX=2` (mục 6) |
+
+---
+
+## 9. Command reference
+
+| Lệnh | Milestone | Mục đích |
+|---|---|---|
+| `python mosaic.py doctor` | M0 | báo cáo trạng thái một phát |
+| `python mosaic.py up / down / clean` | M0 | vòng đời stack; `up` đợi **healthy**; `clean` xoá cả volume |
+| `python mosaic.py check-ports` | M0 | xung đột port trên host, kèm chủ sở hữu |
+| `python mosaic.py check-abstraction` | M0 | cổng kiểm tra độ thuần của lõi (L3) |
+| `python mosaic.py generate` / `python -m tools.seed.load` | M1 | sinh và nạp corpus |
+| `python mosaic.py connectors` | M1 | đăng ký connector Debezium cho một domain |
+| `python mosaic.py cdc-verify [--require-update]` | M1 | chứng minh masking/envelope trên topic |
+| `python mosaic.py loadgen --rate N --duration S` | M1 | ghi OLTP liên tục |
+| `python mosaic.py stockout / restock` | M1 | công tắc lỗi L0 |
+| **`python mosaic.py restart-safety [--mode kill\|stop\|pause]`** | **M2** | **kill Connect dưới tải, chứng minh không gap** |
+| **`python mosaic.py wal-guard [--idle N]`** | **M2** | **heartbeat / WAL-accumulation guard** |
+| **`python mosaic.py resnapshot`** | **M3** | **BLOCKING ad-hoc snapshot, kiểm với số dòng nguồn** |
+| **`python mosaic.py bronze`** | **M3** | **Bronze stream còn sống không, backlog, batch gần nhất** |
+| **`python mosaic.py bronze-verify exactly-once\|replay\|latency`** | **M3** | **các phép chứng minh Bronze và KPI end-to-end** |
+| **`python mosaic.py dbt [-- args]`** | **M3** | **Silver + Gold (assemble rồi dbt)** |
+| **`python -m tools.lakehouse.reconcile`** | **M3** | **Silver == nguồn sống, từng dòng** |
+
+---
+
+## 10. Độ phủ KPI của GR1 Table 4.4
+
+GR1 định nghĩa năm KPI CDC để đo "khi pipeline được implement ở GR2". Hiện **ba KPI đã đo**, một KPI
+đo một phần, một KPI chưa bắt đầu.
+
+| KPI | Trạng thái | Giá trị / vướng mắc |
+|---|---|---|
+| **End-to-end latency (commit nguồn → Iceberg Bronze)** | **đã đo (M3)** | p50 **7.8 s** MySQL / **8.0 s** PostgreSQL, p99 12.3 / 12.9 s; capture p50 0.26 / 0.49 s, phần còn lại là trigger 10 s |
+| Throughput dưới tải liên tục | một phần (M1) | ~100 ops/s sustained, bị giới hạn bởi fsync mỗi commit dưới Docker Desktop |
+| **Restart recovery time** | **đã đo (M2)** | **30.3 s** để đuổi kịp hoàn toàn sau SIGKILL 45 s, với việc ghi vẫn tiếp tục 28.4 s trong lúc hồi phục |
+| DDL handling (ảnh hưởng của `ALTER TABLE` ở downstream) | chưa bắt đầu | giới hạn đã ghi ở ADR 0005 (`schemas.enable=false` không thấy được thay đổi kiểu thuần tuý) |
+| **WAL lag (chỉ PostgreSQL)** | **đã đo (M2)** | tái hiện được flush đứng yên + WAL phình theo yêu cầu; guard đã sửa và đo lại (0 → 688,776 byte) |
+
+*(Bản gốc ghi "Two are now measured" nhưng bảng liệt kê ba KPI đã đo; ADVISOR-BRIEFING cũng nói
+"three of GR1's five". Số đúng là **ba**.)*
+
+---
+
+## 11. Những gì CHƯA được kiểm chứng
+
+Nêu rõ, theo quy tắc báo cáo của dự án.
+
+- **Bản sửa DDL được áp bằng tay lên database đang chạy** (`ALTER PUBLICATION`). Phần sửa trong
+  `domains/ecommerce/ddl/postgres.sql` chỉ có hiệu lực với volume mới. Lưu ý tương tự áp dụng cho
+  `REPLICA IDENTITY FULL`.
+- Nhánh withheld-commit của `bronze-verify replay` (xem 5.5).
+- Iceberg maintenance chưa tồn tại; dbt chưa có lịch.
+- Các profile `gov`, `orch`, `console` chưa từng được bật.
+- Mọi thứ vẫn ở quy mô `small` (~86k dòng seed cộng phần tăng từ load generator).
+
+---
+
+## 12. Run ledgers
+
+Máy đọc được, append-only, mỗi dòng một object JSON. Đây là thứ E1–E4 sẽ đọc lại.
+
+| File | Ghi bởi | Nội dung |
+|---|---|---|
+| `experiments/results/stockout_events.jsonl` | `stockout` / `restock` / `loadgen` | mọi lần hết hàng (tự nhiên hoặc thủ công) kèm timestamp commit ở nguồn |
+| `experiments/results/restart_events.jsonl` | `restart-safety` / `wal-guard` | kết luận từng lần chạy, số gap và trùng, mọi mốc thời gian, offset lúc kill và sau đó, toàn bộ chuỗi mẫu replication slot; từ M3 có thêm dải key từng bảng |
+| `experiments/results/snapshot_events.jsonl` | `resnapshot` | số `op=r` từng bảng so với số dòng nguồn |
+| `experiments/results/bronze_events.jsonl` | `bronze-verify` | các lần chạy exactly-once, Spark-replay và latency |
+| `experiments/results/lakehouse_events.jsonl` | `tools.lakehouse.reconcile` | số missing / extra / differing từng bảng |
+
+Tính đến 2026-09-08, ledger restart có 5 entry: 3 `restart-safety` (pass, inconclusive, pass) và 2
+`wal-guard` (fail, pass). **Các lần thất bại được giữ có chủ đích.** Cặp fail/pass của `wal-guard`
+*chính là* bằng chứng cho A9, và entry `inconclusive` là lần chạy đã làm lộ ra lỗi harness #1 ở 4.6.

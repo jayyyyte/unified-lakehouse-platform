@@ -1,207 +1,229 @@
-# Implementation status
+# Implementation status (Trạng thái implement)
 
-**Last updated:** 2026-10-16 | **Current milestone:** M3 **done, verified** -> M4 next | **Next action:** M4 -- the embedding pipeline (`product_embeddings` from Gold/Silver product text), then register datasets for N1
+**Last updated:** 2026-10-16 | **Current milestone:** M3 **done, verified** → M4 next | **Next action:** M4: embedding pipeline (tạo `product_embeddings` từ text sản phẩm ở Gold/Silver), sau đó đăng ký các dataset cho N1
 
-Fastest way to see real state: `python mosaic.py doctor`.
+Cách nhanh nhất để xem trạng thái thật của hệ thống: `python mosaic.py doctor`.
 
-Keep this file current. It is the first thing a new session should read after
-[CLAUDE.md](../CLAUDE.md), and its job is to prevent re-deriving what is already done.
+> *Thuật ngữ khó tra ở [PROBLEM.md, Phụ lục C](PROBLEM.md#phụ-lục-c--bảng-thuật-ngữ-glossary).*
 
-Update rules: move a milestone to **done** only when its verification actually ran and
-passed. Anything written but not executed is **unverified** — say so explicitly. Record
-non-obvious findings under *Findings*, not just in commit messages.
+**File này để làm gì.** Đây là thứ đầu tiên một phiên làm việc mới phải đọc sau
+[CLAUDE.md](../CLAUDE.md). Nhiệm vụ của nó là tránh phải **suy luận lại** những gì đã làm xong. File
+này là một **snapshot** và bị ghi đè liên tục; còn lịch sử theo thời gian thì nằm ở
+[BUILD-LOG.md](BUILD-LOG.md).
+
+**Quy tắc cập nhật:**
+- Chỉ chuyển một milestone sang **done** khi bước kiểm chứng của nó **đã thật sự chạy và pass**.
+- Thứ gì đã viết mà chưa chạy là **unverified**, và phải ghi rõ như vậy.
+- Phát hiện không hiển nhiên ghi vào mục *Findings*, đừng chỉ để trong commit message.
 
 ---
 
 ## Milestones
 
-| | Milestone | State |
+| | Milestone | Nội dung | Trạng thái |
+|---|---|---|---|
+| **M0** | Problem spec, skeleton, stack definition | Viết PROBLEM.md, dựng khung repo, định nghĩa stack Docker | **done, verified** |
+| **M1** | Sources, seed corpus, load generator | DB nguồn, bộ dữ liệu mẫu, công cụ sinh tải | **done, verified**: CDC chạy thật trên cả hai nguồn, masking đã chứng minh, load generator và "công tắc" stock-out hoạt động |
+| **M2** | CDC ingestion + restart-safety demo | Chứng minh CDC không mất dữ liệu khi sập | **done, verified**: không có gap khi SIGKILL dưới tải; WAL guard của GR1 §4.4 được chạy thử, phát hiện **không có tác dụng**, sửa, đo lại |
+| **M3** | Medallion on Iceberg | Spark ghi Bronze, dbt-trino ghi Silver/Gold | **done, verified**: Bronze exactly-once với *cả hai* nguồn replay; đo được KPI latency end-to-end; Silver khớp nguồn sống từng dòng sau các MERGE incremental dưới tải; Gold khớp các số tổng hợp từ nguồn sống |
+| M4 | Trino federation + embedding pipeline | | catalog Trino xong từ M0; embedding **chưa bắt đầu** |
+| M5 | N1 Freshness Registry | | schema đã có; collector chưa bắt đầu |
+| M6 | N2 Retrieval + fusion engine | | chưa bắt đầu |
+| M7 | Experiments E1–E4 | | chưa bắt đầu |
+| M8 | N3 governance, `jobmarket` domain, console | | chưa bắt đầu |
+
+**Đọc nhanh:** phần "đường ống dữ liệu" (nguồn → CDC → Bronze → Silver → Gold) đã xong và được
+chứng minh. Phần "đóng góp mới" của đề tài (độ tươi, fusion, governance, domain thứ hai) **chưa bắt
+đầu**.
+
+---
+
+## What is verified working (đã kiểm chứng bằng chạy thật)
+
+Mọi dòng dưới đây được xác nhận bằng **một lần chạy thật**, không phải bằng cách đọc code.
+
+**Stack**: `python mosaic.py up` cho 10/10 service healthy; `doctor` pass mọi check (2026-10-05),
+gồm cả check mới `bronze stream`.
+
+| Hạng mục | Bằng chứng | Diễn giải |
 |---|---|---|
-| **M0** | Problem spec, skeleton, stack definition | **done, verified** |
-| **M1** | Sources, seed corpus, load generator | **done, verified** — CDC live on both sources, masking proven, load generator + stock-out lever running |
-| **M2** | CDC ingestion + restart-safety demo | **done, verified** -- no gap across a SIGKILL under load; GR1 section 4.4's WAL guard exercised, found inert, fixed, re-measured |
-| **M3** | Medallion on Iceberg (Spark Bronze, dbt-trino Silver/Gold) | **done, verified** -- Bronze exactly-once across *both* replay sources; end-to-end latency KPI measured; Silver equals the live sources row for row after incremental MERGEs under load; Gold checked against live aggregates |
-| M4 | Trino federation + embedding pipeline | catalogs done in M0; embeddings not started |
-| M5 | N1 Freshness Registry | schema exists; collectors not started |
-| M6 | N2 Retrieval + fusion engine | not started |
-| M7 | Experiments E1–E4 | not started |
-| M8 | N3 governance, `jobmarket` domain, console | not started |
+| MySQL CDC prerequisites | `binlog_format=ROW`, `binlog_row_image=FULL`, `gtid_mode=ON` | MySQL đã bật đủ điều kiện để Debezium đọc binlog đầy đủ cả dòng trước lẫn sau |
+| PostgreSQL CDC prerequisites | `wal_level=logical`, publication `mosaic_pub`, pgvector đã cài | PostgreSQL giải mã WAL được; có publication; có extension vector |
+| Domain schemas | MySQL 3 bảng; PostgreSQL 6 bảng | Đúng schema của GR1 Appendix A |
+| Platform metadata DB | `mosaic_platform` với đủ 6 bảng `platform.*` | DB riêng cho metadata của nền tảng (N1, N3) |
+| Nessie | API v2 ở cổng 19120; lưu `ROCKSDB` trên volume `nessie-data`, sống qua restart | Catalog Iceberg bền vững, restart không mất danh sách bảng |
+| Trino catalogs | `iceberg` (Nessie), `mysql`, `postgresql`, `platform`, tất cả query được | Federation hoạt động |
+| Abstraction gate | `check-abstraction` pass (quét 6 file) | `platform/` không chứa từ vựng domain |
+| Debezium connectors | cả hai `RUNNING`, có khai báo Kafka signal channel | Đang stream thay đổi |
+| PII masking | `cdc-verify` pass trên cả hai nguồn, cả ảnh **before** lẫn **after** | Không có plaintext PII nào trên Kafka |
+| Load generator | 5,401 ops trong 240 s, chênh lệch số dòng khớp **chính xác** trên cả 4 bảng (2026-10-05) | Công cụ sinh tải ghi đúng những gì nó báo |
+| Restart safety (M2, chạy lại ở M3) | SIGKILL Connect 45 s dưới tải: **0 missing**, **183 replayed events** (khớp theo danh tính sự kiện), đuổi kịp 30.2 s sau restart | Không mất sự kiện nào; có trùng do replay, đúng như at-least-once |
+| WAL guard (M2) | Mức tiến của flush trong 130 s nhàn rỗi: 0 byte (lỗi) → 688,776 byte (đã sửa) | Heartbeat giờ thực sự giữ WAL không phình |
+| **Bronze stream (M3)** | `mosaic-spark` chạy `bronze_stream.py` làm tiến trình chính; healthy = query đang active + có progress trong < 60 s; 8 topic → `iceberg.bronze.cdc_events` | Luồng Bronze sống và có tiêu chí "khoẻ" rõ ràng |
+| **Bronze bootstrap (M3)** | sau `resnapshot`, Bronze chứa đúng số dòng nguồn của mỗi bảng dưới dạng `op=r` (`n = distinct keys = distinct event_id`), 114,709 dòng, 0 `_src_ts` null | Nạp lại toàn bộ từ đầu và khớp tuyệt đối |
+| **Bronze exactly-once, phía Connect (M3)** | với các insert nằm trong khoảng id bị khoanh lúc test restart, Kafka có 1,107 / 2,010 / 724 / 95 insert event cho 1,088 / 1,980 / 719 / 95 key; Bronze chứa **đúng một bản ghi mỗi key** | Kafka nhận trùng, Bronze khử trùng hoàn toàn |
+| **Bronze exactly-once, phía Spark (M3)** | `docker kill` stream rơi đúng vào khe giữa lúc Iceberg commit batch 77 và lúc checkpoint commit; khi restart, batch 77 chạy lại: **673 vào, 0 ghi, 673 bị bỏ**; vẫn chỉ có 1 Iceberg snapshot cho batch đó | Trường hợp nguy hiểm nhất của streaming đã xảy ra thật, và không sinh trùng |
+| **End-to-end latency (M3, GR1 Table 4.4)** | từ commit ở nguồn tới Iceberg Bronze snapshot, 120 s ở 20 ops/s: MySQL p50 **7.76 s** / p95 11.66 / p99 12.29 / max 13.21; PostgreSQL p50 **7.99 s** / p95 12.03 / p99 12.91 / max 13.51. Riêng capture (commit → Kafka) p50 0.26 s MySQL, 0.49 s PostgreSQL; phần còn lại là trigger 10 s | Debezium chưa tới 1 giây; phần lớn độ trễ là do Spark đợi trigger 10 s |
+| **Silver (M3)** | 7 model sinh tự động, `MERGE` incremental; sau 4 lần build dưới tải đồng thời, `reconcile` cho **0 missing / 0 extra / 0 differing** ở cả 7 bảng so với nguồn sống (36,678 orders, 70,056 items, 29,827 payments, 6,479 users, 1,000 products, 48 categories, 1,000 inventory) | Silver là bản sao chính xác của nguồn |
+| Silver negative control | cùng phép kiểm nhưng cố tình đặt sai múi giờ nguồn: mọi dòng MySQL đều khác, PostgreSQL 0 | Phép kiểm tra **có khả năng** báo lỗi, tức là nó "có răng" |
+| **Gold (M3)** | `orders` (MERGE incremental, phân vùng theo GR1 §4.3), `users` (`bucket(user_id, 32)`), `product_sales`, `user_category_affinity`; 78/78 dbt node pass, gồm cả hai test tham chiếu chéo nguồn | Tầng Gold đầy đủ, đúng spec |
+| Gold vs live sources | `gold.orders` so với số tổng hợp MySQL: 36,678 orders, 0 missing/extra/differing; `product_sales.stock_qty` so với tồn kho sống: 0/1,000 khác (lúc hệ đứng yên) | Gold đúng khi không có ghi mới |
+| GR1 Listing 4.2 | câu query federation `iceberg.gold.orders` × `postgresql.public.users` chạy được, 100 dòng, 1.61 s | Ví dụ federation trong báo cáo GR1 chạy được thật |
+| ANALYZE post-hook | `SHOW STATS` trên `gold.orders`: NDV `order_id` = 36,678 | Thống kê cho optimizer được cập nhật sau mỗi lần ghi |
+| Trino memory bound | `-Xmx3G` (`docker/trino/jvm.config`) + `mem_limit: 6g` + `MALLOC_ARENA_MAX=2`, 2026-10-16. Cùng workload, trước → sau khi giới hạn: đỉnh `dbt build` incremental 6.20 → **2.59 GiB**, ghi 2,944 phân vùng 7.04 → **3.90 GiB**, đỉnh kernel 7.39 → **3.93 GiB**; 0 lần OOM; 78/78 pass. Riêng `MALLOC_ARENA_MAX` giảm off-heap 1.47 → 0.87 GiB | Trino trước đó "ăn" hết RAM của Docker VM; nay đã bị chặn trần mà không hỏng gì |
+
+## Written but NOT yet executed (đã viết nhưng CHƯA chạy)
+
+- **Nhánh withheld-commit** của `bronze-verify replay`: nhánh code cố tình dời file `commits/N` đi
+  để ép Spark chạy lại một batch. Cả hai lần chạy test đều tự rơi vào các trạng thái mà Spark tự xử
+  lý được (một lần giữa batch, một lần đúng vào khe commit đã ghi / checkpoint chưa ghi), nên nhánh
+  này **chưa bao giờ được kích hoạt**.
+- **Iceberg maintenance** (`optimize`, `expire_snapshots`, `remove_orphan_files`) **chưa tồn tại**.
+  Mỗi MERGE của Silver thêm position-delete files (đã có 5 file trên `silver.orders` sau 4 lần build),
+  mỗi micro-batch Bronze thêm một snapshot, và chưa có gì gộp chúng lại. GR1 giao việc này cho
+  Airflow, nhưng profile `orch` (Airflow) chưa từng được bật.
+- **dbt chưa có lịch chạy**: Silver/Gold chỉ cập nhật khi có người chạy `python mosaic.py dbt`. Vì
+  vậy độ cũ của Gold hiện **do người vận hành quyết định**, cho tới khi có orchestration.
+- Các profile `gov`, `orch`, `console` **chưa từng được bật**. File `docker/api.Dockerfile` chưa tồn
+  tại, nên `console` sẽ build lỗi cho tới M6/M8.
+
+## Current runtime state (trạng thái đang chạy)
+
+Stack đang **up**, profile mặc định, 10/10 healthy, Bronze stream active với backlog 0. Silver và Gold
+được build lần cuối lúc 2026-10-16 03:39 UTC (incremental; nguồn không có thay đổi gì kể từ
+2026-10-05). Không có gì tự động refresh chúng.
+
+Số dòng hiện tại (seed corpus + phần tăng thêm do load generator): orders 36,678, order_items 70,056,
+payments 29,827, users 6,479, products 1,000, categories 48, inventory 1,000.
+
+Checkpoint của Bronze đã được **cất sang chỗ khác, không xoá**, ngày 2026-10-05:
+`spark-state:/opt/mosaic/state/checkpoints/bronze.stale-2026-09-23`. Lý do: offset trong checkpoint
+trỏ vào dữ liệu đã bị Kafka retention xoá, và bảng tương ứng thì rỗng. Có thể xoá khi không còn ai
+cần.
+
+`mosaic_pub` publish 5 bảng: 4 bảng domain + `cdc_heartbeat` (finding 10).
 
 ---
 
-## What is verified working
+## Findings worth carrying into the report (phát hiện nên đưa vào báo cáo GR2)
 
-Confirmed by an actual run, not by inspection.
+> Bản đầy đủ, có bằng chứng và gợi ý cách trình bày: [CHANGES-FROM-GR1.md](CHANGES-FROM-GR1.md).
+> Mã trong ngoặc (A6, A7…) là mã mục trong file đó.
 
-**Stack** — `python mosaic.py up`, 10/10 services healthy; `doctor` all checks passed
-(2026-10-05), including the new `bronze stream` check.
-
-| Check | Evidence |
-|---|---|
-| MySQL CDC prerequisites | `binlog_format=ROW`, `binlog_row_image=FULL`, `gtid_mode=ON` |
-| PostgreSQL CDC prerequisites | `wal_level=logical`, publication `mosaic_pub`, pgvector installed |
-| Domain schemas | MySQL 3 tables; PostgreSQL 6 tables |
-| Platform metadata DB | `mosaic_platform` with all 6 `platform.*` tables |
-| Nessie | API v2 on 19120; `ROCKSDB` on volume `nessie-data`, survives restarts |
-| Trino catalogs | `iceberg` (Nessie), `mysql`, `postgresql`, `platform` — all queryable |
-| Abstraction gate | `check-abstraction` passes (6 files scanned) |
-| Debezium connectors | both `RUNNING`, Kafka signal channel declared |
-| PII masking | `cdc-verify` passes on both sources, before **and** after images |
-| Load generator | 5,401 ops over 240 s, row-count delta matched exactly on all 4 tables (2026-10-05) |
-| Restart safety (M2, re-run M3) | SIGKILL of Connect for 45 s under load: **0 missing**, **183 replayed events** (identity-matched), caught up 30.2 s after restart |
-| WAL guard (M2) | flush advance over 130 s idle: 0 bytes broken -> 688,776 bytes fixed |
-| **Bronze stream (M3)** | `mosaic-spark` runs `bronze_stream.py` as its main process; healthy = query active + progress < 60 s; 8 topics -> `iceberg.bronze.cdc_events` |
-| **Bronze bootstrap (M3)** | after `resnapshot`, Bronze holds exactly each table's source row count as `op=r` (`n = distinct keys = distinct event_id`), 114,709 rows, 0 null `_src_ts` |
-| **Bronze exactly-once, Connect side (M3)** | for the restart-safety run's bracketed inserts, Kafka held 1,107 / 2,010 / 724 / 95 insert events for 1,088 / 1,980 / 719 / 95 keys; Bronze holds **exactly one per key** |
-| **Bronze exactly-once, Spark side (M3)** | `docker kill` of the stream landed between batch 77's Iceberg commit and its checkpoint commit; on restart batch 77 re-ran: **673 in, 0 written, 673 dropped**, still one Iceberg snapshot for the batch; inserts in the window exact |
-| **End-to-end latency (M3, GR1 Table 4.4)** | source commit -> Iceberg Bronze snapshot, 120 s at 20 ops/s: MySQL p50 **7.76 s** / p95 11.66 / p99 12.29 / max 13.21; PostgreSQL p50 **7.99 s** / p95 12.03 / p99 12.91 / max 13.51. Capture (commit -> Kafka) p50 0.26 s MySQL, 0.49 s PostgreSQL; the rest is the 10 s trigger |
-| **Silver (M3)** | 7 generated models, incremental `MERGE`; after 4 builds under concurrent load, `reconcile`: **0 missing / 0 extra / 0 differing** rows in all 7 tables vs the live sources (36,678 orders, 70,056 items, 29,827 payments, 6,479 users, 1,000 products, 48 categories, 1,000 inventory) |
-| Silver negative control | same check with the wrong source zone: every MySQL row differs, PostgreSQL 0 -- the comparison has teeth |
-| **Gold (M3)** | `orders` (incremental MERGE, GR1 section 4.3 partitioning), `users` (`bucket(user_id, 32)`), `product_sales`, `user_category_affinity`; 78/78 dbt nodes pass incl. both cross-source referential tests |
-| Gold vs live sources | `gold.orders` vs MySQL aggregates: 36,678 orders, 0 missing / extra / differing; `product_sales.stock_qty` vs live inventory: 0 of 1,000 differ (at quiescence) |
-| GR1 Listing 4.2 | the federated `iceberg.gold.orders` x `postgresql.public.users` query runs, 100 rows, 1.61 s |
-| ANALYZE post-hook | `SHOW STATS` on `gold.orders`: NDV `order_id` 36,678 |
-| Trino memory bound | `-Xmx3G` (`docker/trino/jvm.config`) + `mem_limit: 6g` + `MALLOC_ARENA_MAX=2`, 2026-10-16. Same workload, uncapped -> final: incremental `dbt build` peak 6.20 -> **2.59 GiB**, 2,944-partition write 7.04 -> **3.90 GiB**, kernel peak 7.39 -> **3.93 GiB**; 0 OOM events; 78/78 pass. `MALLOC_ARENA_MAX` alone took off-heap 1.47 -> 0.87 GiB |
-
-## Written but NOT yet executed
-
-- The **withheld-commit branch** of `bronze-verify replay` (moves `commits/N` aside to force a
-  re-run). Both runs so far crashed into states Spark handles itself -- one mid-batch, one in
-  the exact commit-landed/checkpoint-missing window -- so that branch never fired.
-- Iceberg **maintenance** (`optimize`, `expire_snapshots`, `remove_orphan_files`) does not exist
-  yet. Every Silver MERGE adds position-delete files (5 on `silver.orders` after 4 builds) and
-  every Bronze micro-batch adds a snapshot; nothing compacts them. GR1 gives this to Airflow,
-  whose `orch` profile has never been started.
-- dbt has **no schedule**: Silver/Gold refresh only when `python mosaic.py dbt` runs. Gold's
-  staleness is therefore operator-driven until orchestration exists.
-- The `gov`, `orch` and `console` profiles are still unstarted. `docker/api.Dockerfile` does not
-  exist; `console` will fail to build until M6/M8.
-
-## Current runtime state
-
-Stack **up**, default profile, 10/10 healthy, Bronze stream active with backlog 0. Silver and Gold
-last built at 2026-10-16 03:39 UTC (incremental, no source changes since 2026-10-05); nothing
-refreshes them automatically.
-
-Row counts now (seed corpus + load-generator growth): orders 36,678, order_items 70,056, payments
-29,827, users 6,479, products 1,000, categories 48, inventory 1,000.
-
-Bronze's checkpoint was **set aside, not deleted**, on 2026-10-05:
-`spark-state:/opt/mosaic/state/checkpoints/bronze.stale-2026-09-23` (its offsets pointed at data
-retention had already deleted; the table it belonged to was empty). Safe to remove once nobody
-needs it.
-
-`mosaic_pub` publishes five tables: the four domain tables plus `cdc_heartbeat` (finding 10).
-
----
-
-## Findings worth carrying into the report
-
-> Full narrative version, with evidence and suggested framing:
-> [CHANGES-FROM-GR1.md](CHANGES-FROM-GR1.md).
-
-1. **GR1 Appendix C's SMT masking chain cannot work as specified.** See
+1. **Chuỗi SMT masking ở GR1 Appendix C không thể chạy như đã viết.** Muốn mask được thì phải làm
+   phẳng envelope, mà làm phẳng thì phá đúng cái envelope Bronze cần giữ. Xem
    [ADR 0004](adr/0004-connector-native-masking.md).
-2. **Two GR1 Appendix B image tags do not resolve** (`debezium/connect:2.7`,
-   `projectnessie/nessie:0.90.4` on Docker Hub).
-3. **MySQL reports a missing `FILE` privilege as `ERROR 1045 Access denied`.**
-4. **GR1 Appendix B's Avro converter cannot load** ([ADR 0005](adr/0005-json-converter.md)).
-5. **`docker compose ps` omits exited containers**, which once produced a false "all healthy".
-6. **PostgreSQL emits no before image under the default replica identity** (A6).
-7. **Debezium truncates a mask hash to the source column's width** (A7).
-8. **A load generator that reports its send rate is lying** -- ~100 ops/s sustained here.
-9. **"Restart safety" is at-least-once with a replay window** (A8). *Corrected in M3:* M2's
-   "110 duplicates" counted events per key, which includes legitimate updates; the
-   identity-matched count for a comparable run is 183 replays. Conclusion unchanged.
-10. **GR1 section 4.4's WAL-bloat guard was inert as configured** (A9).
-11. **Kafka retention deleted the CDC history before Bronze could land it -- twice** (A10).
-    2026-09-12: `categories` topic empty. 2026-10-05, after a 10-day stop: *every* table topic
-    empty, and Bronze's checkpoint pointed at deleted offsets (`OffsetOutOfRange`). Recovered
-    both times by a BLOCKING ad-hoc snapshot; Bronze landed it exactly.
-12. **Trino cannot write custom Iceberg snapshot-summary properties.** Spark can (Bronze stamps
-    `max(_src_ts)` and `ingest_ts_us` per commit). Silver/Gold watermarks must be read from the
-    data. Also: **Trino 451's `$files` lists no delete files** -- MERGE's position deletes are
-    visible only in the snapshot summary (`total-position-deletes`). N1 must use summaries.
-13. **Bronze is exactly-once over an at-least-once source** (positive result, M3). One
-    idempotency key -- SHA-256 over op, record key, source position, `source.ts_ms` and both
-    images -- absorbs Connect replays *and* Spark batch re-runs. Neither the whole envelope
-    (its `ts_ms` is processing time) nor the whole source block (PostgreSQL's `sequence` is
-    seeded from the stored offset after a restart) would have worked.
-14. **MySQL `DATETIME` arrives 7 hours off** (A11) -- the wall clock encoded as if UTC. GR1's
-    `TimestampConverter` was load-bearing; with A1's SMTs gone, Silver converts. Negative
-    control proves it.
-15. **GR1 section 4.3's `gold.orders` partitioning is sized for another scale** (A12): 2,944
-    partitions of 12.6 rows; needs Trino's writer cap raised; `ANALYZE` 33x and full scan 14x
-    slower than unpartitioned. Kept as written; **decision open** (see open questions).
-    Measured 2026-10-13: an incremental build that changes **0 rows** still spends 45-61 s on
-    `gold.orders` (one statement scans 27,142 splits for 95 MiB), and was what drove Trino's
-    heap to 6+ GiB before its heap was capped.
-16. **The seed and the load generator used different region vocabularies** (D15) -- cities vs.
-    `north`/`central`/... -- so per-region aggregates split. Fixed in the generator; existing rows
-    keep the five macro-region values.
-17. **Silver must order by source position, not time** (M3 design). A snapshot read carries its
-    *read* time, which can postdate the commit of an UPDATE positioned after it. Verified per
-    source: MySQL `source.pos` is per binlog event (orders and items of one GTID have distinct
-    positions), PostgreSQL `lsn` is per change.
+2. **Hai image tag trong GR1 Appendix B không tồn tại** (`debezium/connect:2.7`, và
+   `projectnessie/nessie:0.90.4` trên Docker Hub).
+3. **MySQL báo thiếu quyền `FILE` bằng lỗi `ERROR 1045 Access denied`**, trông y hệt sai mật khẩu.
+4. **Avro converter trong GR1 Appendix B không load được**: image không có class đó, worker chết
+   ngay khi khởi động ([ADR 0005](adr/0005-json-converter.md)).
+5. **`docker compose ps` giấu các container đã thoát**, từng dẫn tới một kết luận sai là "all
+   healthy".
+6. **PostgreSQL không phát before image với replica identity mặc định** (A6): mọi UPDATE đều có
+   `before: null`.
+7. **Debezium cắt ngắn hash mask theo độ rộng cột nguồn** (A7): cột `VARCHAR(32)` chỉ nhận 32 ký tự
+   hex.
+8. **Load generator báo "tốc độ gửi" là đang nói sai**: tốc độ commit thực tế chỉ khoảng 100 ops/s.
+9. **"Restart safety" thực chất là at-least-once kèm một cửa sổ replay** (A8). *Đính chính ở M3:*
+   con số "110 duplicates" của M2 đếm số sự kiện trên mỗi key, nên lẫn cả các UPDATE hợp lệ; đếm
+   đúng theo danh tính sự kiện thì một lần chạy tương đương có 183 replay. Kết luận không đổi.
+10. **WAL-bloat guard ở GR1 §4.4 không có tác dụng với cấu hình như viết** (A9): heartbeat ghi vào
+    bảng không nằm trong publication.
+11. **Kafka retention đã xoá lịch sử CDC trước khi Bronze kịp nạp, hai lần** (A10). Ngày
+    2026-09-12: topic `categories` rỗng. Ngày 2026-10-05, sau 10 ngày tắt máy: *mọi* topic bảng đều
+    rỗng, và checkpoint Bronze trỏ vào offset đã bị xoá (`OffsetOutOfRange`). Cả hai lần đều khôi
+    phục bằng BLOCKING ad-hoc snapshot, và Bronze nạp lại chính xác.
+12. **Trino không ghi được thuộc tính tuỳ biến vào Iceberg snapshot summary.** Spark thì ghi được
+    (Bronze đóng dấu `max(_src_ts)` và `ingest_ts_us` vào mỗi commit). Vì vậy watermark của
+    Silver/Gold phải đọc **từ dữ liệu**. Thêm nữa: **bảng `$files` của Trino 451 không liệt kê
+    delete file**; position delete của MERGE chỉ thấy được trong snapshot summary
+    (`total-position-deletes`). N1 phải dùng summary.
+13. **Bronze đạt exactly-once trên một nguồn chỉ at-least-once** (kết quả tích cực, M3). Một
+    idempotency key duy nhất, là SHA-256 trên op, record key, vị trí nguồn, `source.ts_ms` và cả hai
+    image, hấp thụ được *cả* replay của Connect *lẫn* việc Spark chạy lại batch. Hai phương án thay
+    thế đều **không** dùng được: hash cả envelope thất bại vì `ts_ms` của envelope là thời điểm xử
+    lý, mỗi lần replay một khác; hash cả khối `source` thất bại vì trường `sequence` của PostgreSQL
+    được khởi tạo lại từ offset đã lưu sau mỗi restart.
+14. **MySQL `DATETIME` đến lệch 7 tiếng** (A11), vì giờ địa phương bị mã hoá như thể là UTC.
+    `TimestampConverter` trong GR1 hoá ra là thứ **thiết yếu** (*load-bearing*). Vì các SMT của A1 đã
+    bị bỏ, giờ Silver làm việc chuyển đổi. Negative control chứng minh điều này.
+15. **Cách phân vùng `gold.orders` ở GR1 §4.3 được thiết kế cho một quy mô khác** (A12): 2,944
+    phân vùng, trung bình 12.6 dòng mỗi phân vùng; phải nâng giới hạn writer của Trino; `ANALYZE` chậm
+    33 lần và full scan chậm 14 lần so với bảng không phân vùng. Tạm giữ như spec; **quyết định còn
+    để ngỏ** (xem Open questions). Đo ngày 2026-10-13: một lần build incremental thay đổi **0 dòng**
+    vẫn tốn 45–61 s cho `gold.orders` (một câu lệnh quét 27,142 split cho 95 MiB dữ liệu), và chính
+    nó đẩy heap Trino lên 6+ GiB trước khi heap bị giới hạn.
+16. **Seed và load generator dùng hai bộ từ vựng vùng miền khác nhau** (D15): một bên dùng tên thành
+    phố, bên kia dùng `north`/`central`/…, nên các số tổng hợp theo vùng bị tách đôi. Đã sửa trong
+    generator; các dòng cũ giữ năm giá trị vùng lớn.
+17. **Silver phải sắp thứ tự theo vị trí trong log nguồn, không theo thời gian** (thiết kế M3). Một
+    dòng đọc từ snapshot mang **thời điểm đọc**, thời điểm này có thể muộn hơn commit của một UPDATE
+    nằm *sau* nó trong log. Nếu sắp theo thời gian, bản UPDATE mới hơn có thể bị bản snapshot cũ đè
+    lên. Đã kiểm tra cho từng nguồn: `source.pos` của MySQL là riêng cho từng binlog event (orders
+    và items trong cùng một GTID có vị trí khác nhau), `lsn` của PostgreSQL là riêng cho từng thay
+    đổi.
 
-## Open questions
+## Open questions (câu hỏi còn mở)
 
-- **`gold.orders` partition spec (A12).** GR1's `day x bucket(region, 16)` gives ~13-row files
-  here. Keep it (spec-faithful) or move to month-level partitioning? Best settled in E2 at
-  `full` scale. The user's call.
-- **Kafka retention (A10).** Leave the 7-day default (Bronze is the system of record) or set
-  `retention.ms=-1` on CDC topics so a long stop cannot erase unconsumed history?
-- **Scale.** Everything is still `small` (~36k orders). GR1 section 10.1 wants 10M+ for E2.
-  `full` projects to ~40 minutes of loading; now that the pipeline shape is fixed, it is worth
-  doing before M7.
-- **Silver partitioning (D12).** Unpartitioned current-state tables; revisit only if a consumer
-  needs pruning.
+- **Partition spec của `gold.orders` (A12).** Spec `day x bucket(region, 16)` của GR1 cho ra file
+  khoảng 13 dòng ở quy mô này. Giữ nguyên để trung thành với spec, hay chuyển sang phân vùng theo
+  tháng? Nên chốt trong thí nghiệm E2 ở quy mô `full`. **Đây là quyết định của bạn.**
+- **Kafka retention (A10).** Giữ mặc định 7 ngày (vì Bronze mới là system of record), hay đặt
+  `retention.ms=-1` cho các topic CDC để một lần tắt máy lâu không thể xoá lịch sử chưa được tiêu
+  thụ?
+- **Quy mô.** Mọi thứ vẫn ở mức `small` (~36k orders). GR1 §10.1 muốn 10M+ dòng cho E2. Ước tính
+  nạp `full` mất khoảng 40 phút; giờ hình dạng pipeline đã cố định nên đáng làm trước M7.
+- **Phân vùng Silver (D12).** Silver hiện là các bảng trạng thái hiện tại, không phân vùng; chỉ xem
+  lại nếu có consumer cần pruning.
 
 ---
 
-## Tooling added for future sessions
+## Tooling added for future sessions (công cụ đã có)
 
-- `python mosaic.py doctor` — one-shot state report, now including the Bronze stream.
-- `python mosaic.py check-ports` / `check-abstraction` / `cdc-verify` / `loadgen` /
-  `stockout` / `restock` / `restart-safety` / `wal-guard` — see CLAUDE.md.
-- `python mosaic.py resnapshot` — Debezium BLOCKING snapshot of every captured table over the
-  Kafka signal channel; verifies op=r counts against source row counts.
-- `python mosaic.py bronze` — Bronze stream liveness, backlog, totals, last batch.
-- `python mosaic.py bronze-verify exactly-once` — carries the last `restart-safety` run through to
-  Bronze: exactly one insert event per bracketed key.
-- `python mosaic.py bronze-verify replay` — SIGKILLs the Bronze stream under load, forces the
-  in-flight batch to re-run, proves no duplicate and no gap.
-- `python mosaic.py bronze-verify latency` — GR1 Table 4.4's end-to-end KPI, exact per row
-  (`_ingest_ts` joins each row to the snapshot that published it).
-- `python mosaic.py dbt [-- <args>]` — Silver/Gold. The image runs `assemble.py` first, which
-  generates Silver from the connectors and copies `domains/*/gold/` in.
-- `python -m tools.lakehouse.reconcile` — Silver vs the live sources, row by row. Run idle.
-- `tools/trino.py` — stdlib Trino REST client; `query()`, `scalar()`.
-- Ledgers in `experiments/results/`: `restart_events`, `snapshot_events`, `bronze_events`,
-  `lakehouse_events`, `stockout_events` (`.jsonl`, append-only, failures kept on purpose --
-  `lakehouse_events` line 2 is the deliberate wrong-zone negative control).
+- `python mosaic.py doctor`: báo cáo trạng thái một phát, giờ có cả Bronze stream.
+- `python mosaic.py check-ports` / `check-abstraction` / `cdc-verify` / `loadgen` / `stockout` /
+  `restock` / `restart-safety` / `wal-guard`: xem CLAUDE.md.
+- `python mosaic.py resnapshot`: chạy Debezium BLOCKING snapshot cho mọi bảng được capture qua
+  Kafka signal channel, rồi kiểm số lượng `op=r` với số dòng ở nguồn.
+- `python mosaic.py bronze`: Bronze stream còn sống không, backlog, tổng số, batch gần nhất.
+- `python mosaic.py bronze-verify exactly-once`: lấy lần chạy `restart-safety` gần nhất và kiểm
+  tới tận Bronze: mỗi key trong khoảng bị khoanh có đúng một insert event.
+- `python mosaic.py bronze-verify replay`: SIGKILL Bronze stream dưới tải, ép batch đang chạy dở
+  phải chạy lại, chứng minh không trùng và không mất.
+- `python mosaic.py bronze-verify latency`: KPI end-to-end của GR1 Table 4.4, chính xác tới từng
+  dòng (`_ingest_ts` nối mỗi dòng với snapshot đã publish nó).
+- `python mosaic.py dbt [-- <args>]`: build Silver/Gold. Image chạy `assemble.py` trước để sinh
+  Silver từ cấu hình connector và chép `domains/*/gold/` vào.
+- `python -m tools.lakehouse.reconcile`: so Silver với nguồn sống từng dòng. Chạy khi hệ đứng yên.
+- `tools/trino.py`: Trino REST client chỉ dùng thư viện chuẩn; có `query()`, `scalar()`.
+- Các ledger trong `experiments/results/`: `restart_events`, `snapshot_events`, `bronze_events`,
+  `lakehouse_events`, `stockout_events` (`.jsonl`, append-only, **cố ý giữ cả lần thất bại**;
+  dòng 2 của `lakehouse_events` là lần chạy negative control sai múi giờ có chủ đích).
 - `docs/BUILD-LOG.md`, `docs/ADVISOR-BRIEFING.md`, `docs/CHANGES-FROM-GR1.md`, `CLAUDE.md`.
 
-## Immediate next steps
+## Immediate next steps (việc tiếp theo)
 
-M3 is closed. M4 is next:
+M3 đã đóng. Tiếp theo là M4:
 
-1. **Embedding pipeline** (`pipelines/embeddings/`): read product text, embed with
-   `all-MiniLM-L6-v2` (384-d), write `product_embeddings` with `refreshed_at`. Its batch cadence
-   *is* the slow channel's staleness, so it must be a deliberate, recorded interval.
-2. **Register datasets** in `platform.datasets` -- Bronze, the 7 Silver tables, the 4 Gold tables,
-   the vector table -- each with its `row_timestamp_column` (`_src_ts` on Silver/Gold,
-   `refreshed_at` on the vectors). That is the hand-off to M5 (N1 collectors), which will read
-   Bronze watermarks from snapshot summaries and Silver/Gold watermarks from the data (finding 12).
-3. Consider the open questions above before E2; scale to `full` before M7.
+1. **Embedding pipeline** (`pipelines/embeddings/`): đọc text sản phẩm, embed bằng
+   `all-MiniLM-L6-v2` (384 chiều), ghi vào `product_embeddings` kèm cột `refreshed_at`. **Chu kỳ batch
+   của pipeline này *chính là* độ cũ của kênh chậm**, nên nó phải là một khoảng thời gian được chọn
+   có chủ đích và được ghi lại.
+2. **Đăng ký dataset** vào `platform.datasets`: Bronze, 7 bảng Silver, 4 bảng Gold, bảng vector. Mỗi
+   dataset khai báo `row_timestamp_column` của nó (`_src_ts` cho Silver/Gold, `refreshed_at` cho
+   vector). Đây là điểm bàn giao sang M5 (các collector của N1). Collector sẽ đọc watermark Bronze
+   từ snapshot summary và watermark Silver/Gold từ dữ liệu (finding 12).
+3. Cân nhắc các open question ở trên trước E2; nâng quy mô lên `full` trước M7.
 
-### Caveats to carry forward
+### Caveats to carry forward (lưu ý mang theo)
 
-- The publication fix (finding 10) and `REPLICA IDENTITY FULL` were applied to the **running**
-  database; the DDL edits only take effect on a fresh volume.
-- Kafka holds a re-snapshot (2026-10-05) on top of streaming history; Silver orders by source
-  position, so multiple `op=r` per key are harmless -- do not "fix" them.
-- With `loadgen` running, the seed's empty stock slice refills within minutes. **For an
-  on-demand failure, use `stockout`.**
-- Gold is as fresh as the last `dbt` run. During the M3 load test the live source showed product
-  68 at stock 0 while Silver/Gold still said 9 -- the L0 asymmetry, observed in this stack.
+- Bản sửa publication (finding 10) và `REPLICA IDENTITY FULL` được áp **bằng tay lên database đang
+  chạy**. Phần sửa trong file DDL chỉ có hiệu lực với volume mới tạo.
+- Kafka đang chứa một lần re-snapshot (2026-10-05) chồng lên lịch sử streaming. Silver sắp thứ tự
+  theo vị trí nguồn nên nhiều `op=r` cho cùng một key là vô hại; **đừng "sửa" chúng**.
+- Khi `loadgen` đang chạy, phần sản phẩm hết hàng có sẵn trong seed sẽ được nhập lại trong vài
+  phút. **Muốn tạo lỗi theo yêu cầu thì dùng `stockout`.**
+- Gold chỉ tươi bằng lần chạy `dbt` gần nhất. Trong bài test tải M3, nguồn sống cho thấy sản phẩm 68
+  có tồn kho 0, trong khi Silver/Gold vẫn ghi 9. Đó chính là **sự bất đối xứng L0, quan sát được
+  ngay trong stack này**.

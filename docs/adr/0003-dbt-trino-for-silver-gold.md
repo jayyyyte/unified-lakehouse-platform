@@ -1,39 +1,49 @@
 # ADR 0003 — dbt-trino for Silver and Gold; Spark retained for Bronze
 
+*(Dùng dbt-trino cho Silver và Gold; giữ Spark cho Bronze)*
+
 **Status:** Accepted · **Date:** 2026-08-24 · **Relates to:** GR1 §4.1, §4.2, Figure 4.1
 
-## Context
+## Context (bối cảnh)
 
-Figure 4.1 places three engines in the processing layer: Spark Structured Streaming, dbt, and
-Great Expectations. GR1 §4.2 assigns Spark the whole write path — Bronze append plus merge or
-upsert into Silver and Gold.
+Figure 4.1 đặt **ba engine** ở tầng xử lý: Spark Structured Streaming, dbt, và Great Expectations.
+GR1 §4.2 giao cho Spark **toàn bộ đường ghi**: append vào Bronze, rồi merge/upsert vào Silver và Gold.
 
-Those are two different jobs. Bronze landing is genuinely streaming: consume Debezium topics
-continuously, normalise the envelope, deduplicate on the source offset, append. Silver and Gold
-are batch set-operations over tables that already live in Iceberg, and Trino can already write
-Iceberg through `MERGE INTO`.
+Thực ra đó là **hai công việc khác nhau**:
+- **Nạp Bronze** là streaming thật sự: tiêu thụ liên tục các topic Debezium, chuẩn hoá envelope, khử
+  trùng theo source offset, append.
+- **Silver và Gold** là các phép toán tập hợp **theo batch** trên những bảng đã nằm trong Iceberg, và
+  Trino vốn đã ghi được Iceberg qua `MERGE INTO`.
 
-## Decision
+## Decision (quyết định)
 
-- **Bronze** — Spark Structured Streaming, as designed. Streaming earns its place here.
-- **Silver and Gold** — dbt models compiled to Trino SQL, writing Iceberg via `MERGE INTO`.
-- **Quality gates** — dbt `tests:` blocks, replacing Great Expectations.
+- **Bronze**: Spark Structured Streaming, như thiết kế. Streaming xứng đáng có mặt ở đây.
+- **Silver và Gold**: các **dbt model** biên dịch thành SQL Trino, ghi Iceberg qua `MERGE INTO`.
+- **Quality gates** (cổng chất lượng): khối `tests:` của dbt, thay Great Expectations.
 
-## Consequences
+## Consequences (hệ quả)
 
-**Kept.** The medallion semantics of GR1 §4.2 exactly: Bronze holds the unmodified change
-envelope; Silver is deduplicated, typed, masked, validated; Gold is joined, aggregated and
-partitioned per §4.3. Spark stays in the architecture and in the report.
+**Giữ được.** Ngữ nghĩa medallion của GR1 §4.2 đúng y nguyên: Bronze giữ envelope chưa sửa; Silver được
+khử trùng, ép kiểu, mask, kiểm tra; Gold được join, tổng hợp và phân vùng theo §4.3. Spark vẫn ở trong
+kiến trúc và trong báo cáo.
 
-**Gained.** Silver and Gold become declarative SQL rather than imperative Spark jobs — less
-code, and the lineage is derivable from the DAG for free. No second heavy runtime for batch.
-Great Expectations disappears as a dependency while its function survives: uniqueness on the
-dedup key, not-null on `_src_ts`, and the cross-source referential checks that GR1 §4.3 says no
-single engine can enforce, all expressed as dbt tests.
+**Được thêm.**
+- Silver và Gold thành **SQL khai báo** thay vì job Spark mệnh lệnh: ít code hơn, và lineage suy ra
+  được miễn phí từ DAG của dbt.
+- Không cần một runtime nặng thứ hai cho việc batch.
+- Great Expectations biến mất khỏi danh sách phụ thuộc nhưng **chức năng của nó còn nguyên**: unique
+  trên khoá khử trùng, not-null trên `_src_ts`, và **các phép kiểm tham chiếu chéo nguồn** mà GR1 §4.3
+  nói không engine đơn lẻ nào cưỡng chế được (ví dụ `user_id` của một order bên MySQL phải tồn tại trong
+  bảng `users` bên PostgreSQL). Tất cả viết được thành dbt test.
 
-**Lost.** Great Expectations' richer expectation vocabulary and its data-docs output. dbt tests
-cover the checks §4.3 actually specifies; the surplus was not being used.
+**Mất.** Bộ từ vựng expectation phong phú hơn và phần **data-docs** của Great Expectations. dbt test
+phủ đủ các phép kiểm §4.3 thực sự đặc tả; phần dư ra vốn không được dùng.
 
-**Note.** `ANALYZE` after each batch write (GR1 §4.5) becomes a dbt post-hook rather than a
-separately scheduled Airflow task — the operational overhead §4.5 flags is still real, but it
-is now attached to the write that causes it instead of to a timer.
+**Ghi chú.** Lệnh `ANALYZE` sau mỗi lần ghi batch (GR1 §4.5, để optimizer của Trino có thống kê đúng)
+trở thành một **dbt post-hook** thay vì một task Airflow lên lịch riêng. Overhead vận hành §4.5 cảnh báo
+vẫn có thật, nhưng giờ nó gắn vào **chính lần ghi gây ra nó** thay vì gắn vào một bộ hẹn giờ.
+
+> **Trạng thái implement (M3, 2026-10-05): verified.** Rủi ro kỹ thuật chính của ADR này là `MERGE
+> INTO` trên Iceberg do Nessie quản lý. Sau 4 lần build incremental dưới tải ghi đồng thời, Silver khớp
+> nguồn sống từng dòng ở cả 7 bảng. 78/78 dbt node pass (67 test), gồm cả hai phép kiểm chéo nguồn của
+> §4.3. Chi tiết: BUILD-LOG mục 5, CHANGES-FROM-GR1 B3.

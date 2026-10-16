@@ -1,225 +1,239 @@
 # Advisor Briefing — MOSAIC (GR2)
 
-**A script for the supervision meeting: what to say, in what order, what to show live, and
-what to ask.**
+**Kịch bản: nói gì, theo thứ tự nào, demo gì, và hỏi gì.**
 
-Prepared 2026-09-08 · Covers M0 → M2 · Student: Chu Tuan Linh
+Soạn 2026-09-08 (sau M2), bổ sung phần M3 sau 2026-10-05 · Covers M0 → M3
 
-> Numbers in this script are real measurements, not estimates. Every one is reproducible from
-> `experiments/results/` or by re-running the command shown. If asked "how do you know?",
-> the answer is always a command — say it.
+> Mọi con số trong kịch bản này là **số đo thật**, không phải ước lượng. Mỗi số đều tái hiện được từ
+> `experiments/results/` hoặc bằng cách chạy lại lệnh được ghi kèm. Nếu bị hỏi *"làm sao em biết?"*,
+> câu trả lời luôn là **một lệnh**, và hãy nói ra lệnh đó.
 
 ---
 
-## 0. Before the meeting (10 minutes)
+## 0. Before the meeting (trước buổi gặp, 10 phút)
 
 ```bash
-python mosaic.py up          # brings the stack up AND waits for healthy
-python mosaic.py doctor      # expect: all checks passed
-python mosaic.py cdc-verify  # masking + envelope proof; expect all topics matching
+python mosaic.py up          # bật stack VÀ đợi tới khi healthy
+python mosaic.py doctor      # kỳ vọng: all checks passed
+python mosaic.py cdc-verify  # chứng minh masking + envelope; kỳ vọng mọi topic khớp
 ```
 
-If `doctor` is not clean, **do not demo** — brief from this document and the ledgers instead.
-A failed live demo costs more than a described one.
+Nếu `doctor` không sạch thì **đừng demo**. Trình bày từ tài liệu này và các ledger. Một demo trực tiếp
+bị hỏng gây hại nhiều hơn một demo được kể lại.
 
 ---
 
-## 1. Opening — one paragraph (30 seconds)
+## 1. Opening — one paragraph (mở đầu, 30 giây)
 
-> "The design phase produced an architecture. This phase is producing *evidence*. Three
-> milestones are closed and verified — the stack, the sources with live CDC, and now restart
-> safety. The most useful output so far is not that the design works; it is the four places
-> where the GR1 design **cannot** work as written, each found by building the thing and
+> "The design phase produced an architecture. This phase is producing *evidence*. Four
+> milestones are closed and verified — the stack, the sources with live CDC, restart safety, and the
+> medallion layer on Iceberg. The most useful output so far is not that the design works; it is the
+> places where the GR1 design **cannot** work as written, each found by building the thing and
 > measuring it. That is what I want to walk through."
 
+*Ý chính:* Giai đoạn thiết kế tạo ra một kiến trúc; giai đoạn này tạo ra **bằng chứng**. Bốn milestone
+đã đóng và đã kiểm chứng. Sản phẩm hữu ích nhất không phải là "thiết kế chạy được", mà là **những chỗ
+thiết kế GR1 *không thể* chạy như đã viết**, mỗi chỗ đều tìm ra bằng cách xây và đo.
+
+*(Bản soạn ngày 09-08 nói "three milestones"; đã cập nhật thành bốn vì M3 đóng ngày 10-05.)*
+
 ---
 
-## 2. Where the project stands (1 minute)
+## 2. Where the project stands (dự án đang ở đâu, 1 phút)
 
-| | Milestone | State |
+| | Milestone | Trạng thái |
 |---|---|---|
 | M0 | Stack, problem spec, skeleton | done, verified |
 | M1 | Sources, seed corpus, load generator, live CDC | done, verified |
 | M2 | CDC restart safety + WAL guard | done, verified |
-| **M3** | **Medallion on Iceberg — Spark Bronze, dbt-trino Silver/Gold** | **done, verified 2026-10-05 (new since M2 briefing)** |
-| M4–M8 | Federation, freshness registry, fusion engine, experiments, governance | not started |
+| **M3** | **Medallion on Iceberg: Spark Bronze, dbt-trino Silver/Gold** | **done, verified 2026-10-05 (mới so với lần briefing M2)** |
+| M4–M8 | Federation/embedding, freshness registry, fusion engine, experiments, governance | chưa bắt đầu |
 
-One sentence on scale: everything runs at `small` (~86k seeded rows, ~140k after load-generator growth). The 10M-row run for E2
-is deliberately deferred until the pipeline shape stops changing, because it costs ~40 minutes
-per run.
+Một câu về quy mô: mọi thứ chạy ở mức `small` (~86k dòng seed, ~140k sau khi load generator ghi thêm).
+Lần chạy 10M dòng cho E2 được **cố ý hoãn** cho tới khi hình dạng pipeline không còn thay đổi, vì mỗi
+lần chạy tốn khoảng 40 phút.
 
 ---
 
-## 3. The headline result (3 minutes) — *lead with this*
+## 3. The headline result (kết quả chính, 3 phút): *mở đầu bằng phần này*
 
-**Two findings from M2. Both are silent failures: no error, no warning, no log line. Both
-were found only by building the measurement.**
+**Hai phát hiện từ M2. Cả hai đều là lỗi im lặng: không lỗi, không cảnh báo, không dòng log nào. Cả
+hai chỉ được tìm ra nhờ xây phép đo.**
 
-### Finding A8 — "restart safety" is at-least-once, not exactly-once
+### Finding A8: "restart safety" là at-least-once, không phải exactly-once
 
-GR1 Table 4.3 says restart safety is achieved because the offset is stored in the Kafka
-Connect offsets topic. True — but the offset is flushed **on a timer**
-(`offset.flush.interval.ms = 60000`), not per record. So a crash replays up to a minute of
-work from a stale offset.
+GR1 Table 4.3 nói restart safety đạt được vì offset được lưu trong offsets topic của Kafka Connect.
+Đúng, nhưng offset được flush **theo đồng hồ** (`offset.flush.interval.ms = 60000`), không theo từng
+record. Vì vậy một lần sập sẽ phát lại tới một phút công việc từ một offset cũ.
 
-> **Measured:** SIGKILL the connector for 45 s under load. **Zero** rows lost across 4 tables
-> and 3,711 source rows. **110 duplicate events** replayed. Fully caught up **30.3 s** after
-> restart. *(M3 correction: "110" counted events per key, which includes legitimate updates;
-> the identity-matched replay count for a comparable run is 183. The conclusion is unchanged.)*
+> **Đo được:** SIGKILL connector 45 s dưới tải. **Không** mất dòng nào trên 4 bảng và 3,711 dòng
+> nguồn. **110 duplicate event** được phát lại. Đuổi kịp hoàn toàn **30.3 s** sau restart. *(Đính chính
+> ở M3: "110" là đếm event theo key, nên lẫn cả các update hợp lệ; đếm đúng theo danh tính sự kiện thì
+> một lần chạy tương đương có 183 replay. Kết luận không đổi.)*
 
-The point to make: the replay window is bounded by the *flush interval*, not by the length of
-the outage. A 5-second crash and a 5-minute crash replay the same ~60 s of work. This is also
-why GR1 §4.2's "deduplicate on the source offset" is load-bearing for M3 rather than
-decorative.
+Điểm cần nhấn mạnh: cửa sổ replay bị giới hạn bởi **chu kỳ flush**, không phải bởi **độ dài lần sập**.
+Sập 5 giây hay 5 phút đều phát lại khoảng 60 s công việc như nhau. Đây cũng là lý do câu *"deduplicate
+on the source offset"* của GR1 §4.2 là **bắt buộc** cho M3 chứ không phải trang trí.
 
-### Finding A9 — GR1 §4.4's WAL-bloat guard was inert
+### Finding A9: WAL-bloat guard của GR1 §4.4 vô hiệu
 
-GR1 §4.4 correctly identifies the PostgreSQL-specific risk: a logical replication slot retains
-WAL until the consumer confirms it, so a stalled consumer grows WAL without bound. It names the
-mitigation — a heartbeat that advances `confirmed_flush_lsn` even when the captured tables are
-idle. That mitigation was configured. **It was doing nothing.**
+GR1 §4.4 nhận diện đúng rủi ro riêng của PostgreSQL: một logical replication slot giữ WAL cho tới khi
+consumer xác nhận, nên một consumer bị kẹt khiến WAL phình không giới hạn. GR1 nêu cả biện pháp: một
+heartbeat đẩy `confirmed_flush_lsn` lên kể cả khi các bảng capture đang nhàn rỗi. Biện pháp đó đã được
+cấu hình, **nhưng nó không làm gì cả.**
 
-The heartbeat was firing perfectly: 503 rows written, 503 messages on the heartbeat topic. But
-`heartbeat.action.query` wrote to a table that was **not in the publication**, and `pgoutput`
-decodes only published tables. So the heartbeat's WAL never became a change event, Debezium
-never gained a new LSN to confirm, and the flush position stood still while WAL grew.
+Heartbeat vẫn bắn hoàn hảo: 503 dòng được ghi, 503 message trên topic heartbeat. Nhưng
+`heartbeat.action.query` ghi vào một bảng **không nằm trong publication**, mà `pgoutput` chỉ giải mã
+bảng đã publish. Vì vậy WAL của heartbeat không bao giờ thành change event, Debezium không có LSN mới
+để xác nhận, và vị trí flush đứng yên trong khi WAL tăng.
 
-> **Measured, over the same 130 s idle window with a healthy connector:**
+> **Đo được, cùng cửa sổ nhàn rỗi 130 s, connector khoẻ:**
 >
-> | | `confirmed_flush_lsn` advance |
+> | | mức tiến `confirmed_flush_lsn` |
 > |---|---|
-> | heartbeat table outside the publication | **0 bytes** |
-> | heartbeat table published *(the fix)* | **688,776 bytes** |
+> | bảng heartbeat ngoài publication | **0 byte** |
+> | bảng heartbeat được publish *(bản sửa)* | **688,776 byte** |
 >
-> Retained WAL fell from 704,880 to 4,544 bytes.
+> Retained WAL giảm từ 704,880 xuống 4,544 byte.
 
-**The framing that matters:** this is the same *shape* as an earlier finding — PostgreSQL emits
-no before-image under the default replica identity, so GR1 §4.2's envelope requirement silently
-failed on one of the two sources. Both are mitigations GR1 names in prose that are ineffective
-in practice until something measures them. That pattern — *"the report is right about the risk
-and wrong about the fix being automatic"* — is the strongest contribution of the implementation
-phase so far.
+**Cách đóng khung quan trọng nhất:** đây là cùng *dạng* với một phát hiện trước đó. PostgreSQL không
+phát before image với replica identity mặc định, nên yêu cầu envelope của GR1 §4.2 âm thầm thất bại ở
+một trong hai nguồn. Cả hai đều là biện pháp GR1 nêu trong văn xuôi nhưng vô hiệu trong thực tế cho tới
+khi có thứ gì đó đo chúng. Pattern đó, *"báo cáo đúng về rủi ro nhưng sai khi cho rằng biện pháp tự
+động có tác dụng"*, là **đóng góp mạnh nhất** của giai đoạn implement cho tới giờ.
 
----
-
-### M3 in one breath (if the meeting is after 2026-10-05)
-
-- **Bronze is exactly-once over an at-least-once source.** A Connect SIGKILL put 1,107 insert
-  events on Kafka for 1,088 orders; Bronze holds 1,088. A Spark SIGKILL landed *between* an
-  Iceberg commit and its checkpoint commit; the re-run batch wrote 0 of 673 rows twice.
-- **First Table 4.4 KPI unblocked:** source commit -> Iceberg Bronze p50 7.8 s (MySQL) /
-  8.0 s (PostgreSQL); Debezium itself is sub-second, the 10 s trigger is the rest.
-- **dbt-trino `MERGE` on Nessie Iceberg works** -- after four incremental builds under load,
-  Silver equals the live sources row for row in all 7 tables (and a wrong-zone negative
-  control makes every MySQL row differ, so the check has teeth).
-- **Three new findings** (CHANGES-FROM-GR1 A10-A12): Kafka retention silently erased the CDC
-  history twice; MySQL `DATETIME` arrives 7 h off (GR1's TimestampConverter was load-bearing);
-  §4.3's `gold.orders` partitioning yields 12.6-row files here, `ANALYZE` 33x slower.
+> Câu nói gợi ý: *"The report is right about the risk and wrong about the fix being automatic."*
 
 ---
 
-## 4. Live demo (5 minutes) — optional, pick one
+### M3 in one breath (M3 trong một hơi, nếu buổi gặp diễn ra sau 2026-10-05)
 
-**Option A — the WAL guard (recommended; it is the newest result and it is visual).**
+- **Bronze là exactly-once trên một nguồn at-least-once.** Một lần SIGKILL Connect đưa 1,107 insert
+  event lên Kafka cho 1,088 order; Bronze chứa đúng 1,088. Một lần SIGKILL Spark rơi *đúng vào khe*
+  giữa lúc Iceberg commit và lúc checkpoint commit; batch chạy lại ghi trùng 0 trên 673 dòng.
+- **KPI đầu tiên của Table 4.4 đã đo được:** từ commit ở nguồn tới Iceberg Bronze p50 7.8 s (MySQL) /
+  8.0 s (PostgreSQL). Bản thân Debezium dưới 1 giây; phần còn lại là trigger 10 s của Spark.
+- **dbt-trino `MERGE` trên Nessie Iceberg chạy được.** Sau bốn lần build incremental dưới tải, Silver
+  khớp nguồn sống từng dòng ở cả 7 bảng (và negative control với múi giờ sai làm mọi dòng MySQL khác
+  đi, nên phép kiểm "có răng").
+- **Ba phát hiện mới** (CHANGES-FROM-GR1 A10–A12): Kafka retention âm thầm xoá lịch sử CDC hai lần;
+  MySQL `DATETIME` đến lệch 7 h (`TimestampConverter` của GR1 hoá ra thiết yếu); phân vùng
+  `gold.orders` của §4.3 cho ra file 12.6 dòng ở quy mô này, `ANALYZE` chậm 33 lần.
+
+---
+
+## 4. Live demo (demo trực tiếp, 5 phút): tuỳ chọn, chọn một
+
+**Phương án A: WAL guard** (khuyến nghị; là kết quả mới nhất của M2 và trực quan).
 
 ```bash
 python mosaic.py wal-guard --idle 130
 ```
 
-Runs ~6 minutes. Too long for a live meeting — **show the recorded output instead** from
-`docs/BUILD-LOG.md` §3.4, which has the fail/pass pair side by side. Say: "this is recorded
-because it takes six minutes; the command is one line and you can re-run it."
+Chạy khoảng 6 phút, quá dài cho buổi gặp. **Hãy cho xem output đã ghi lại** ở `docs/BUILD-LOG.md`
+§4.4, nơi có cặp fail/pass đặt cạnh nhau. Nói: *"this is recorded because it takes six minutes; the
+command is one line and you can re-run it."* (Phần này được ghi lại vì mất sáu phút; lệnh chỉ một dòng
+và thầy/cô có thể chạy lại.)
 
-**Option B — restart safety (better if they want to see something happen).**
+**Phương án B: restart safety** (hợp hơn nếu giảng viên muốn thấy thứ gì đó *xảy ra*).
 
 ```bash
 python mosaic.py restart-safety --rate 25 --warmup 20 --stall 45 --drain 20
 ```
 
-Runs ~4 minutes. Narrate while it runs:
-1. warm-up — CDC streaming normally
-2. **SIGKILL** the connector; writes keep going into a dead pipeline
-3. restart; connectors back in ~8 s
-4. the proof — every auto-increment id written during the outage must appear on its topic
+Chạy khoảng 4 phút. Vừa chạy vừa kể:
+1. warm-up: CDC đang stream bình thường;
+2. **SIGKILL** connector; việc ghi vẫn tiếp tục đổ vào một pipeline đã chết;
+3. restart; connector sống lại sau khoảng 8 s;
+4. phần chứng minh: mọi auto-increment id được ghi trong lúc sập phải xuất hiện trên topic của nó.
 
-Then point at the table: `missing` is 0 in every row, `dup` is not.
+Sau đó chỉ vào bảng kết quả: `missing` bằng 0 ở mọi dòng, còn `dup` thì không.
 
-**Option C — no demo.** Show `python mosaic.py doctor` (10 seconds, all green) and talk from
-section 3. This is the safe choice.
-
----
-
-## 5. What is next (1 minute)
-
-*(Written before M3; M3 is now done -- see the box in section 3.)*
-
-**M4 -- the embedding pipeline**, then dataset registration for **M5 (N1 Freshness Registry)**.
-The embedding batch interval *is* the slow channel's staleness, so it gets chosen and recorded
-deliberately. Two decisions worth raising: keep GR1 §4.3's `gold.orders` partition spec or
-move to month-level (A12), and whether CDC topics should keep a longer retention (A10).
+**Phương án C: không demo.** Cho xem `python mosaic.py doctor` (10 giây, tất cả xanh) rồi nói theo mục 3.
+Đây là lựa chọn an toàn.
 
 ---
 
-## 6. If asked: what is *not* verified
+## 5. What is next (việc tiếp theo, 1 phút)
 
-Answer these directly. Do not soften them.
+**M4: embedding pipeline**, sau đó đăng ký dataset cho **M5 (N1 Freshness Registry)**. Chu kỳ batch
+của embedding *chính là* độ cũ của kênh chậm, nên nó phải được chọn và ghi lại có chủ đích.
 
-- The publication fix is applied to the **running** database by hand; the DDL edit only takes
-  effect on a fresh volume.
-- No Iceberg maintenance (compaction, snapshot expiry) and no dbt schedule yet: Gold is as
-  fresh as the last manual `python mosaic.py dbt`.
-- The `gov`, `orch`, `console` profiles have never been started.
-- Everything is at `small` scale.
+Hai quyết định nên đem ra bàn:
+- giữ partition spec `gold.orders` của GR1 §4.3 hay chuyển sang theo tháng (A12);
+- có nên cho các topic CDC retention dài hơn không (A10).
 
 ---
 
-## 7. Questions to ask the advisor
+## 6. If asked: what is *not* verified (nếu bị hỏi: cái gì CHƯA kiểm chứng)
 
-Bring these; a supervision meeting where the student only reports is a wasted one.
+Trả lời thẳng. Đừng nói giảm đi.
 
-1. **On framing the findings.** Four GR1 configurations cannot be executed as written (Avro
-   converter, SMT masking chain, replica identity, heartbeat publication) plus two image tags
-   that do not resolve. Should these be presented as a **dedicated results chapter** in GR2, or
-   distributed through the implementation chapter as they arise? *My preference: a dedicated
-   chapter — they are the phase's main contribution and burying them undersells the work.*
-
-2. **On scope.** M3–M8 is a lot: medallion, freshness registry, fusion engine, four
-   experiments, governance, second domain. If time runs short, which is the better GR2:
-   the **full ladder shallowly** (all four rungs, second domain proving genericity), or
-   **L0–L2 deeply** (the fusion result measured properly, genericity argued rather than
-   demonstrated)?
-
-3. **On the experiments.** GR1 §10.1 wants 10M+ rows for the Top-N pushdown experiment to be
-   meaningful. At the measured load rate that is ~40 minutes per corpus regeneration. Is a
-   single 10M run at the end acceptable, or does the comparison need repeated trials?
-
-4. **On the novelty claim.** Is "freshness-aware rank fusion, with staleness as an explicit
-   term in the scoring function" defensible as the thesis contribution, given RRF's ubiquity as
-   the baseline? Anything in the recent literature I should be checking against?
+- Bản sửa publication được áp **bằng tay lên database đang chạy**; phần sửa trong DDL chỉ có hiệu lực
+  với volume mới.
+- Chưa có Iceberg maintenance (compaction, snapshot expiry) và chưa có lịch chạy dbt: Gold chỉ tươi
+  bằng lần chạy `python mosaic.py dbt` thủ công gần nhất.
+- Các profile `gov`, `orch`, `console` chưa từng được bật.
+- Mọi thứ ở quy mô `small`.
 
 ---
 
-## 8. One-line summary to leave them with
+## 7. Questions to ask the advisor (câu hỏi để hỏi giảng viên)
+
+Mang theo các câu này. Một buổi gặp mà sinh viên chỉ báo cáo là một buổi lãng phí.
+
+1. **Về cách trình bày các finding.** Bốn cấu hình GR1 không thể thực thi như đã viết (Avro converter,
+   chuỗi SMT masking, replica identity, heartbeat publication), cộng hai image tag không tồn tại, và từ
+   M3 thêm A10–A12. Nên trình bày chúng thành một **chương kết quả riêng** trong GR2, hay rải trong
+   chương implement khi chúng xuất hiện? *Ý em: một chương riêng, vì chúng là đóng góp chính của giai
+   đoạn này và chôn chúng đi là đánh giá thấp công việc.*
+
+2. **Về phạm vi.** M4–M8 còn nhiều: freshness registry, fusion engine, bốn thí nghiệm, governance,
+   domain thứ hai. Nếu thiếu thời gian, GR2 nào tốt hơn: **đủ cả cái thang nhưng nông** (cả bốn bậc,
+   domain thứ hai chứng minh tính tổng quát), hay **L0–L2 thật sâu** (kết quả fusion được đo kỹ, tính
+   tổng quát được lập luận chứ không được chứng minh)?
+
+3. **Về thí nghiệm.** GR1 §10.1 muốn 10M+ dòng để thí nghiệm Top-N pushdown có ý nghĩa. Với tốc độ
+   nạp đo được, mỗi lần sinh lại corpus mất khoảng 40 phút. Một lần chạy 10M ở cuối có chấp nhận được
+   không, hay phép so sánh cần nhiều lần lặp?
+
+4. **Về claim tính mới.** *"Freshness-aware rank fusion, with staleness as an explicit term in the
+   scoring function"* (fusion xếp hạng có tính tới độ tươi, với độ cũ là một số hạng tường minh trong
+   hàm chấm điểm) có đứng vững làm đóng góp của luận văn không, khi RRF là baseline phổ biến khắp nơi?
+   Có tài liệu gần đây nào em nên đối chiếu không?
+
+---
+
+## 8. One-line summary to leave them with (một câu tổng kết)
 
 > "Four milestones closed, three of GR1's five CDC KPIs now measured, the medallion layer proven
 > exactly-once end to end, and a growing list of places where the design as written could not
 > have been run — each found by measuring rather than reading. Next is the slow channel: the
 > embedding pipeline."
 
+*Ý chính:* Bốn milestone đã đóng, ba trong năm KPI CDC của GR1 đã đo, tầng medallion được chứng minh
+exactly-once từ đầu tới cuối, và một danh sách ngày càng dài những chỗ thiết kế như đã viết không thể
+chạy, mỗi chỗ đều tìm ra bằng **đo** chứ không phải bằng **đọc**. Tiếp theo là kênh chậm: embedding
+pipeline.
+
 ---
 
 ### Appendix — the numbers, for reference during the meeting
 
-| Measurement | Value | Source |
+*(Phụ lục: các con số để tra trong buổi gặp)*
+
+| Phép đo | Giá trị | Nguồn |
 |---|---|---|
-| Services healthy | 10/10 | `mosaic.py doctor` |
-| Seeded corpus | 86,314 rows across 7 tables | `manifest.json` |
-| Sustained OLTP write rate | ~100 ops/s | M1, bounded by per-commit fsync |
-| Offset flush interval | 60,000 ms | live worker config |
-| Rows lost across a 45 s SIGKILL | **0** (of 3,711) | `restart_events.jsonl` |
-| Duplicate events replayed | 110 | same |
-| Connectors `RUNNING` after restart | 8.3 s | same |
-| Fully caught up after restart | 30.3 s | same |
-| MySQL GTIDs replayed during recovery | 1,808 (`1-61738` → `1-63546`) | same |
-| Flush advance, guard broken → fixed | 0 → 688,776 bytes | same |
-| Retained WAL, guard broken → fixed | 704,880 → 4,544 bytes | same |
+| Service healthy | 10/10 | `mosaic.py doctor` |
+| Corpus seed | 86,314 dòng trên 7 bảng | `manifest.json` |
+| Tốc độ ghi OLTP duy trì được | ~100 ops/s | M1, bị giới hạn bởi fsync mỗi commit |
+| Chu kỳ flush offset | 60,000 ms | config worker đang chạy |
+| Số dòng mất qua một lần SIGKILL 45 s | **0** (trên 3,711) | `restart_events.jsonl` |
+| Duplicate event được phát lại | 110 (M2; đếm đúng ở M3: 183) | như trên |
+| Connector `RUNNING` sau restart | 8.3 s | như trên |
+| Đuổi kịp hoàn toàn sau restart | 30.3 s | như trên |
+| Số GTID MySQL phát lại khi hồi phục | 1,808 (`1-61738` → `1-63546`) | như trên |
+| Mức tiến flush, guard hỏng → đã sửa | 0 → 688,776 byte | như trên |
+| Retained WAL, guard hỏng → đã sửa | 704,880 → 4,544 byte | như trên |
+| Latency commit → Bronze, p50 (M3) | 7.76 s MySQL / 7.99 s PostgreSQL | `bronze_events.jsonl` |
+| Silver vs nguồn sống (M3) | 0 missing / 0 extra / 0 differing, 7 bảng | `lakehouse_events.jsonl` |
