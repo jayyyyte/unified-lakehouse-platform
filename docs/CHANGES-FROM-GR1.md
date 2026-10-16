@@ -2,7 +2,7 @@
 
 **A complete record of how the implementation differs from `GR1_report.md`, and why.**
 
-Last updated: 2026-09-08 · Covers milestones M0–M2 (M2 complete)
+Last updated: 2026-10-05 · Covers milestones M0–M3 (M3 complete)
 
 > **Source verified.** Every claim here was checked against **`GR1_report.pdf`** (49 pages),
 > not only against the Markdown conversion. Page numbers below refer to the PDF.
@@ -50,6 +50,9 @@ and C — and discovering that is exactly what GR2 is for.
 | A7 | Debezium **silently truncates the mask hash to the source column's width** — a narrow column yields a partial digest | Finding | [0004](adr/0004-connector-native-masking.md) |
 | A8 | **Restart safety is at-least-once with a replay window**, not exactly-once — Connect flushes offsets on a timer, which Table 4.3's one-line summary does not say | Finding | — |
 | A9 | **§4.4's WAL-bloat guard was inert** — the heartbeat wrote to a table outside the publication, so `pgoutput` never decoded it and `confirmed_flush_lsn` never moved | Finding | — |
+| A10 | **§4.2's "replay capability" expires with Kafka retention** — twice, Bronze could not be bootstrapped from the topics; after a 10-day stop every table topic was empty | Finding | — |
+| A11 | **MySQL `DATETIME` arrives 7 hours off** — Debezium encodes the zone-less wall clock as if it were UTC; the harmonisation §4.4 gave to a `TimestampConverter` SMT has to happen in Silver | Finding | (see A1) |
+| A12 | **§4.3's `gold.orders` partitioning is too fine for the prototype** — 2,944 partitions of 12.6 rows on average; the build fails Trino's default writer cap; `ANALYZE` 33x and a full scan 14x slower than the same data unpartitioned | Finding | — |
 | B1 | Apache Ranger → Open Policy Agent | Substitution | [0001](adr/0001-opa-instead-of-ranger.md) |
 | B2 | DataHub → OpenLineage + Marquez | Substitution | [0002](adr/0002-marquez-instead-of-datahub.md) |
 | B3 | Spark (Silver/Gold) + Great Expectations → dbt-trino | Substitution | [0003](adr/0003-dbt-trino-for-silver-gold.md) |
@@ -73,6 +76,11 @@ and C — and discovering that is exactly what GR2 is for.
 | D8 | No `ExtractNewRecordState` at the connector | Operational | (see A1) |
 | D9 | MySQL bulk load runs as `root`, not `cdc` | Operational | — |
 | D10 | `REPLICA IDENTITY FULL` on `users`, `products`, `inventory` | Operational | (see A6) |
+| D11 | Silver is **generated** per captured table; Gold lives in `domains/<domain>/gold/` | Operational | (see C6) |
+| D12 | Silver = one unpartitioned current-state table per captured table, soft deletes | Operational | — |
+| D13 | dbt runs in its own container (`mosaic/dbt:1.8`), behind the `transform` profile | Operational | [0003](adr/0003-dbt-trino-for-silver-gold.md) |
+| D14 | Trino `iceberg.max-partitions-per-writer` raised 100 → 5000 | Operational | (see A12) |
+| D15 | Load generator draws regions from the seed's vocabulary | Operational | — |
 
 ---
 
@@ -480,10 +488,29 @@ Nothing in the architecture. It sharpens one claim and creates one obligation.
    it, and the key is the source coordinates — `(file, pos, row)` for MySQL, `(lsn, txId)` for
    PostgreSQL — not the business primary key.
 
+### Correction (M3): the "duplicates" column above is not a count of replays
+
+M2's harness counted *events per key beyond the first*. That also counts a row legitimately
+inserted and then updated inside the window -- an order advancing `pending -> paid` is two
+source events, not one event twice -- and it ignored tables without a generated key
+(`inventory`, `products`) entirely. So "110" mixes replays with ordinary updates on four
+tables and omits two others.
+
+M3 changed the metric to what the claim needs: **the same source event delivered more than
+once**, matched on op, source position (`file/pos/row` or `lsn/txId`, plus `source.ts_ms`) and
+both images. The comparable M3 run (SIGKILL, 45 s, 25 ops/s, 2026-10-05) measured **183
+replayed events across six tables**, 54 of them replayed inserts; the old metric on the same run
+read 138 over the four keyed tables. Gap-freedom was unaffected (0 missing, again), and so is
+every conclusion above -- the replay window is real and Bronze must absorb it. M3 then
+**proved it does** (see the M3 section of BUILD-LOG): every one of the 1,088 + 1,980 + 719 + 95
+inserts in the bracketed ranges is in Bronze exactly once, although Kafka received 1,107 +
+2,010 + 724 + 95 of them.
+
 ### Status
 
 **Verified.** Reproducible on demand with `python mosaic.py restart-safety`; every run appends
-to `experiments/results/restart_events.jsonl`.
+to `experiments/results/restart_events.jsonl`. Since M3, `python mosaic.py bronze-verify
+exactly-once` carries the same run through to Bronze.
 
 ---
 
@@ -580,6 +607,160 @@ implementation phase actually contribute?"*
 
 **Verified, with a before/after pair.** Both runs are kept in
 `experiments/results/restart_events.jsonl`. The failing one is the evidence.
+
+---
+
+## A10. §4.2's "replay capability" expires with Kafka retention
+
+**Found in M3, twice.** The same shape as A6 and A9: a property the report states without its
+precondition.
+
+### What GR1 says
+
+> **§4.2** — Bronze stores the unmodified envelope *"in order to preserve full auditability and
+> replay capability"*. **Table 4.1** — Kafka is the *"durable streaming buffer that provides
+> replay"*.
+
+### What actually happens
+
+Kafka runs its default `log.retention.hours=168`; nothing in Appendix B overrides it. Retention
+is enforced on wall-clock time, including **the moment a stopped broker starts again** -- before
+any consumer has had a chance to read.
+
+| Date | Situation | Earliest retained offsets |
+|---|---|---|
+| 2026-09-12 | M1 snapshotted on 2026-08-28; Bronze did not exist yet | `orders` 113,993 of 125,464; `categories` **144 of 144 -- an empty topic** (categories never change after seeding) |
+| 2026-10-05 | stack stopped since ~2026-09-25 (Docker Desktop restart) | **every one of the 7 table topics: earliest == latest**. Bronze's own checkpoint pointed at offsets that no longer existed and the stream failed with `OffsetOutOfRange` |
+
+A Bronze stream bootstrapped from the topics at either point could never have seen a row that
+existed only in the deleted range -- in the first case, not one category.
+
+### What we do instead
+
+- **Recovery:** a Debezium **BLOCKING ad-hoc snapshot** over a Kafka signal channel
+  (`python mosaic.py resnapshot`). It needs no source grants and no publication change -- an
+  incremental snapshot would need a signalling table, i.e. an `INSERT` grant GR1 Appendix A
+  deliberately withholds from `cdc`. Measured 2026-10-05: all 7 tables re-emitted **exactly**
+  their source row counts (114,709 `op=r` events, 40.4 s), and Bronze landed every one
+  (`n = distinct keys = source rows` per table).
+- **Detection:** the Bronze stream keeps Spark's `failOnDataLoss=true`, so a gap is a crashed
+  container, not a silent skip. Its pairing guard refuses to start when the checkpoint has
+  progress but the table is gone. `--reset-checkpoint` *renames* the checkpoint rather than
+  deleting it.
+
+### Impact on GR1's claims
+
+Replay from Kafka is bounded by retention; **auditability lives in Bronze, not in Kafka** --
+true only once Bronze is landing continuously. Add the precondition to §4.2. A longer retention
+(or `retention.ms=-1` on the CDC topics) would widen the window; it is not done here, because
+the report's design point is that Bronze, not the broker, is the system of record.
+
+### Status
+
+**Verified twice; recovery verified.** Ledger: `experiments/results/snapshot_events.jsonl`.
+
+---
+
+## A11. MySQL `DATETIME` arrives 7 hours off; the harmonisation moves to Silver
+
+**Found in M3.** A consequence of A1 that only becomes visible once rows are typed.
+
+### What GR1 says
+
+> **§4.4** — *"the `TimestampConverter` transform harmonizes the differing timestamp
+> representations produced by MySQL and PostgreSQL into a single ISO 8601 format."*
+
+The sentence reads as cosmetic -- one format instead of two.
+
+### What actually happens
+
+It is semantic. MySQL `DATETIME` has no zone. Under `time.precision.mode=connect` Debezium sends
+it as epoch milliseconds of the **wall clock interpreted as UTC**. MySQL here runs
+`time_zone=SYSTEM` = `+07` (container `TZ=Asia/Ho_Chi_Minh`), so the value is seven hours in
+the future of the instant it describes:
+
+```
+after.created_at  = 1791200479000      -> read as UTC: 2026-10-05 11:41:19
+source.ts_ms      = 1791175279628      -> 2026-10-05 04:41:19.628 UTC   (the commit)
+difference        = 25,199 s  ~ 7 h
+```
+
+PostgreSQL `TIMESTAMPTZ` arrives as a correct ISO-8601 instant (`...Z`). Unharmonised, every
+cross-source comparison of event times -- an order against its user, a sale against a stock-out
+-- is off by the source's UTC offset.
+
+### What we do instead
+
+A1 removed the SMT chain, so the `TimestampConverter` never runs. Silver does the conversion:
+every zone-less source timestamp is read in `MOSAIC_SOURCE_TZ` and stored as
+`timestamp(6) with time zone` (`cdc_decode` kind `wallclock_ms` in
+`pipelines/transform/macros/cdc_current_state.sql`).
+
+### Evidence
+
+`python -m tools.lakehouse.reconcile` compares Silver with the live sources, timestamps as epoch
+microseconds. With the correct zone: **0 differing rows** in all 7 tables. Negative control with
+`MOSAIC_SOURCE_TZ=UTC`: **every** MySQL row differs (33,605 / 64,556 / 27,837) while the
+PostgreSQL tables stay at 0 -- the conversion is the only thing that makes the two agree.
+
+### Impact on GR1's claims
+
+§4.4's `TimestampConverter` is load-bearing, not cosmetic. State in §4.4 that MySQL datetimes
+are zone-less and need the source's zone to become instants, wherever that conversion runs.
+
+### Status
+
+**Verified, with a negative control.** Ledger: `experiments/results/lakehouse_events.jsonl`.
+
+---
+
+## A12. §4.3's `gold.orders` partitioning is too fine for the prototype
+
+**Found in M3.** Not a contradiction -- a specification sized for a different scale, which the
+report does not say.
+
+### What GR1 says
+
+> **§4.3** — *"orders are partitioned by `PARTITIONED BY (days(created_at), bucket(16,
+> region))` to support both time-series and regional analytics"*.
+
+### What actually happens
+
+Implemented exactly (`ARRAY['day(created_at)', 'bucket(region, 16)']`). The seed spans 370 days
+and up to 15 region values. The first full build **failed**: `ICEBERG_TOO_MANY_OPEN_PARTITIONS
+-- Exceeded limit of 100 open writers`. With the cap raised (D14) it builds, and the table is:
+
+| `gold.orders` | value |
+|---|---|
+| rows | 36,678 |
+| partitions | **2,944** |
+| data files | 2,968, **12.6 rows each** on average, 10.5 MB in total |
+
+Measured against the same rows in the unpartitioned `silver.orders`:
+
+| operation | partitioned (GR1) | unpartitioned | ratio |
+|---|---|---|---|
+| `ANALYZE` (§4.5's required post-write step) | 8.25 s | 0.25 s | **33x** |
+| full scan `count(*), sum(total_amount)` | 1.28 s | 0.09 s | **14x** |
+| incremental MERGE of ~600-2,600 orders (dbt) | 19-30 s | 1.4-2.5 s (Silver) | ~10x |
+
+Two further observations. `bucket(16, region)` over a column with ten or fifteen values is
+identity partitioning with extra steps: each value lands in its own bucket and several buckets
+stay empty. And at GR1's own 10M-row target (§10.1) the same spec gives roughly 3,400 rows per
+partition -- better, but still files of well under a megabyte.
+
+### Impact on GR1's claims
+
+The spec is executable, and is kept as written for now. What the report should add is the scale
+it assumes, and that `ANALYZE` cost grows with partition count -- the overhead §4.5 already
+flags is multiplied by this choice. A month-level time partition (or day without the region
+bucket) would suit the prototype; **that is a design decision left open** -- E2 (Top-N pushdown
+over Gold) is where it should be settled, at `full` scale.
+
+### Status
+
+**Measured.** GR1 Listing 4.2's federated query runs against this table in 1.61 s and returns
+its 100 rows.
 
 ---
 
@@ -696,6 +877,14 @@ scheduled Airflow task — the operational overhead §4.5 flags is still real, b
 attached to the write that causes it instead of to a timer.
 
 Full argument: [ADR 0003](adr/0003-dbt-trino-for-silver-gold.md).
+
+**Status (M3): verified.** `MERGE INTO` on Nessie-catalogued Iceberg -- the main technical
+risk ADR 0003 carried -- ran four incremental builds against concurrent writes (inserts plus
+every update kind the load generator makes), after which Silver equalled the live sources row
+for row on every compared column, in all 7 tables (`tools/lakehouse/reconcile.py`). Trino
+commits each MERGE as an `overwrite` with position-delete files (merge-on-read). 67 dbt tests
+replace Great Expectations, including both cross-source referential checks §4.3 names, and
+`ANALYZE` runs as a post-hook on every Gold model.
 
 ---
 
@@ -896,6 +1085,15 @@ opaque strings.
 no way to recover, after the fact, what the source-commit time of an already-written row was.
 This lands in M3 for that reason.
 
+**Status (M3).** Bronze: every row carries `_src_ts` (envelope `source.ts_ms`) and `_ingest_ts`
+(one literal per micro-batch), and every commit stamps `mosaic.max_src_ts[_ms]` -- overall and
+per topic -- plus `mosaic.ingest_ts_us` into the Iceberg snapshot summary; the last joins each
+row to the snapshot that published it, which is how the end-to-end latency KPI is measured.
+Silver and Gold: every row carries both columns, defined as those of the **newest contributing
+change** (not-null enforced by dbt tests). The snapshot-summary half **cannot** hold for
+Silver/Gold: Trino has no way to write custom summary properties (STATUS finding 12), so N1
+will read Trino-written tables' watermarks from the data instead.
+
 ---
 
 ## C9. Seed and load generators as first-class deliverables
@@ -967,6 +1165,11 @@ Mechanical. No effect on the architecture's claims, but they are why the stack r
 | **D7** | Explicit `decimal.handling.mode=string`, `time.precision.mode=connect` | Debezium's default for `DECIMAL` is `precise`, which emits base64-encoded bytes — unusable downstream without special handling. `string` keeps `DECIMAL(12,2)` exact and readable; Silver casts back. `connect` avoids microsecond-int representations Iceberg cannot map directly. Not specified in GR1. |
 | **D8** | No `ExtractNewRecordState` at the connector | Consequence of A1 — Bronze keeps the full envelope; flattening moves to Bronze→Silver. |
 | **D9** | MySQL bulk load runs as `root`, not `cdc` | Server-side `LOAD DATA INFILE` needs the **global `FILE` privilege**. `cdc` deliberately holds only GR1 Appendix A's least-privilege replication grants. Granting `FILE` to the replication account to make a one-off seed work would undermine the very thing that appendix is careful about. **Seeding is an operator action, so it uses the operator account.** |
+| **D11** | Silver is **generated**, one model per captured table, by `pipelines/transform/assemble.py`; Gold is hand-written in `domains/<domain>/gold/` and copied in | Silver's job (dedup, type, latest-wins) depends only on a table's key, columns and Debezium's encodings -- all derivable from the connector config and the live catalog. Hand-written, seven near-identical models would put domain vocabulary into `pipelines/` and make the second domain edit it. Generated, **adding a domain still touches only `domains/`** (C6). A domain is now five things: `ddl/`, `connectors/`, `gold/`, `retrieval.yaml`, `tags.yaml`. |
+| **D12** | Silver = one **unpartitioned current-state table** per captured table, latest-wins by source position, soft deletes (`_is_deleted`) | GR1 §4.3 says Silver is *"partitioned by source system and date to simplify replay"*. Source system is implicit in a per-table layout, and replay is Bronze's job here (A10). A date partition on a table updated in place moves every updated row between partitions on each MERGE. **Open to revisit** if a Silver consumer needs pruning. |
+| **D13** | dbt runs in its own image (`dbt-core 1.8.8`, `dbt-trino 1.8.3`), behind compose profile `transform`, via `python mosaic.py dbt` | The host interpreter (3.14) is newer than dbt-core supports, and a pinned image makes every build resolve the same dbt. A one-shot job, so `up` never waits on it. |
+| **D14** | Trino `iceberg.max-partitions-per-writer=5000` (default 100) | Required to run GR1 §4.3's `gold.orders` partition spec at all (A12). |
+| **D15** | `tools/loadgen` draws regions from `tools/seed/vocab.py` | The two generators had separate region vocabularies (cities vs. `north`/`central`/...), so every per-region aggregate split in two -- visible only once Gold grouped by region. Fixed going forward; rows already written keep their values. |
 
 ### A debugging note worth keeping (D9)
 
@@ -997,7 +1200,7 @@ Bounding the delta matters: it shows the GR1 design largely survived contact wit
 | **Kafka 3.7 KRaft**, no ZooKeeper | Unchanged |
 | **Iceberg on MinIO**, Nessie catalog | Unchanged (registry corrected, A4) |
 | **Medallion Bronze/Silver/Gold semantics** (§4.2) | Unchanged |
-| **Partitioning strategy** (§4.3) | Unchanged (but see F3) |
+| **Partitioning strategy** (§4.3) | Gold: implemented as written (but see A12, F3); Silver: see D12 |
 | **Trino 451** as federation layer, `ANALYZE` workflow (§4.5) | Unchanged |
 | **pgvector HNSW**, `m=16, ef_construction=64` (§3.4) | Unchanged |
 | **Two-track top-*k* taxonomy** (§5.2) | Unchanged — adopted as the experiment structure |
@@ -1070,6 +1273,11 @@ But **Appendix A.2** defines `users` with `id BIGSERIAL PRIMARY KEY` — **there
 
 Correct form is `bucket(32, id)`, or rename the column in the DDL for consistency. This will
 surface for real in M3 when the Gold partitioning is actually applied.
+
+**Resolved in M3** without touching Appendix A's DDL: `gold.users` exposes the key as
+`user_id` (`u.id AS user_id`) and is partitioned `bucket(user_id, 32)`, which is what §4.3's
+sentence -- and every join from `orders` -- already assumes. The report text can then stay;
+only a footnote that Gold renames the key is needed.
 
 ## F4. Figure 4.1 shows deferred components as if in scope
 
