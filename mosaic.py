@@ -47,6 +47,7 @@ PORTS: dict[str, tuple[int, str]] = {
     "MINIO_CONSOLE_PORT":   (9001,  "minio (console)"),
     "NESSIE_PORT":          (19120, "nessie"),
     "TRINO_PORT":           (8090,  "trino"),
+    "SPARK_UI_PORT":        (4040,  "spark ui (bronze stream)"),
     "OPA_PORT":             (8181,  "opa"),
     "MARQUEZ_PORT":         (5000,  "marquez"),
     "MARQUEZ_ADMIN_PORT":   (5001,  "marquez (admin)"),
@@ -275,7 +276,8 @@ def _print_endpoints() -> None:
   Schema Reg     http://localhost:{host_port('SCHEMA_REGISTRY_PORT')}
   MinIO console  http://localhost:{host_port('MINIO_CONSOLE_PORT')}    (minioadmin / minioadmin)
   Nessie         http://localhost:{host_port('NESSIE_PORT')}
-  MySQL          localhost:{host_port('MYSQL_PORT')}           (cdc / cdcpw, db ecommerce_tx)
+  Spark UI       http://localhost:{host_port('SPARK_UI_PORT')}    (the Bronze stream)
+  MySQL         localhost:{host_port('MYSQL_PORT')}           (cdc / cdcpw, db ecommerce_tx)
   PostgreSQL     localhost:{host_port('POSTGRES_PORT')}           (cdc / cdcpw, db ecommerce_md)
 
   next:  python mosaic.py connectors""")
@@ -483,6 +485,18 @@ def cmd_doctor(args) -> int:
     except (urllib.error.URLError, OSError) as e:
         add("debezium connectors", False, f"Connect unreachable ({e})")
 
+    status = _bronze_status()
+    if status is None:
+        add("bronze stream", False, "no status file -- python mosaic.py logs spark")
+    else:
+        age = time.time() - status.get("written_at", 0)
+        live = bool(status.get("active")) and age < 60
+        totals = status.get("totals", {})
+        add("bronze stream", live,
+            f"{'active' if live else 'STOPPED or stale'}, {len(status.get('topics', []))} topics, "
+            f"{totals.get('written', 0)} rows landed since start, "
+            f"backlog {status.get('backlog_records', '?')}")
+
     # Reuse the real gate rather than reimplementing it.
     import io, contextlib
     buf = io.StringIO()
@@ -621,6 +635,67 @@ def cmd_wal_guard(args) -> int:
                  "--mode", args.mode, "--idle", str(args.idle))
 
 
+def cmd_resnapshot(args) -> int:
+    """Re-emit every captured table's current rows as op=r events (M3, finding A10)."""
+    argv = ["--domain", args.domain, "--timeout", str(args.timeout)]
+    for table in args.table or []:
+        argv += ["--table", table]
+    return _tool("tools.cdc.snapshot", *argv)
+
+
+# ------------------------------------------------------------------ lakehouse
+BRONZE_STATUS = "/tmp/mosaic-bronze/status.json"
+
+
+def _bronze_status() -> dict | None:
+    """The Bronze stream's own status file, or None if the stream never wrote one."""
+    raw = _exec("mosaic-spark", "cat", BRONZE_STATUS)
+    try:
+        return json.loads(raw) if raw else None
+    except json.JSONDecodeError:
+        return None
+
+
+def cmd_bronze(args) -> int:
+    """State of the Bronze stream: liveness, backlog, and what the last batch did."""
+    status = _bronze_status()
+    if status is None:
+        print("the Bronze stream has not written a status file.")
+        print("\n--- last 30 log lines: spark ---")
+        print("\n".join(compose_out("logs", "--tail", "30", "spark").splitlines()[-30:]))
+        return 1
+    age = time.time() - status.get("written_at", 0)
+    live = bool(status.get("active")) and age < 60
+    totals, last = status.get("totals", {}), status.get("last_batch") or {}
+    print(f"  stream     {'ACTIVE' if live else 'STOPPED or stale'}  "
+          f"(status {age:.0f}s old, started {status.get('started_at', '?')})")
+    print(f"  table      {status.get('table')}  <- {len(status.get('topics', []))} topic(s)")
+    print(f"  backlog    {status.get('backlog_records', '?')} record(s) not yet consumed")
+    print(f"  since start {totals.get('batches', 0)} batch(es), {totals.get('rows_in', 0)} in, "
+          f"{totals.get('written', 0)} written, duplicates dropped: "
+          f"{totals.get('dup_in_batch', 0)} in-batch + {totals.get('dup_in_bronze', 0)} already in Bronze")
+    if last:
+        print(f"  last batch #{last.get('batch_id')}: {last.get('rows_in')} in, "
+              f"{last.get('written')} written, max _src_ts {last.get('max_src_ts')}")
+    return 0 if live else 1
+
+
+def cmd_dbt(args) -> int:
+    """Silver + Gold: assemble the dbt project from domains/, then run dbt in its container."""
+    dbt_args = [a for a in (args.dbt_args or []) if a != "--"] or ["build"]
+    return compose("run", "--rm", "dbt", *dbt_args, profiles=["transform"])
+
+
+def cmd_bronze_verify(args) -> int:
+    """Exactly-once landing (Connect- and Spark-side replay) and end-to-end latency."""
+    argv = [args.check, "--domain", args.domain]
+    if args.check in ("replay", "latency"):
+        argv += ["--rate", str(args.rate)]
+    if args.check == "latency":
+        argv += ["--duration", str(args.duration)]
+    return _tool("tools.bronze.verify", *argv)
+
+
 # ------------------------------------------------------------------- shells
 def cmd_sql(args) -> int:
     return compose("exec", "trino", "trino")
@@ -724,6 +799,29 @@ def main() -> int:
     wg.add_argument("--idle", type=float, default=150.0,
                     help="idle seconds per phase; must exceed the 60s offset flush interval")
     wg.set_defaults(func=cmd_wal_guard)
+
+    rsn = sub.add_parser("resnapshot",
+                         help="re-emit captured tables as op=r events (Kafka retention recovery)")
+    rsn.add_argument("--domain", default="ecommerce")
+    rsn.add_argument("--table", action="append", help="restrict to a captured table; repeatable")
+    rsn.add_argument("--timeout", type=float, default=900.0)
+    rsn.set_defaults(func=cmd_resnapshot)
+
+    sub.add_parser("bronze", help="Bronze stream state: liveness, backlog, last batch"
+                   ).set_defaults(func=cmd_bronze)
+    dbt = sub.add_parser("dbt", help="Silver/Gold via dbt-trino (default: build); "
+                                     "extra args go to dbt, e.g. dbt -- run -s gold")
+    dbt.add_argument("dbt_args", nargs=argparse.REMAINDER)
+    dbt.set_defaults(func=cmd_dbt)
+
+    bv = sub.add_parser("bronze-verify",
+                        help="prove Bronze exactly-once (after restart-safety), Spark replay, "
+                             "or measure commit->Bronze latency")
+    bv.add_argument("check", choices=["exactly-once", "replay", "latency"])
+    bv.add_argument("--domain", default="ecommerce")
+    bv.add_argument("--rate", type=float, default=20.0)
+    bv.add_argument("--duration", type=int, default=120)
+    bv.set_defaults(func=cmd_bronze_verify)
 
     sub.add_parser("sql", help="Trino CLI").set_defaults(func=cmd_sql)
     ps = sub.add_parser("psql", help="PostgreSQL shell")

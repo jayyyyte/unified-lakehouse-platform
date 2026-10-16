@@ -1,0 +1,61 @@
+# Quality gates for the ecommerce Gold tier (ADR 0003: dbt tests replace Great
+# Expectations). Cross-source referential checks are the ones GR1 section 4.3 says no
+# single database can enforce -- orders/items live in MySQL, users/products in
+# PostgreSQL. They are checked only on rows older than five minutes: the two sources
+# arrive through independent connectors, so integrity *across* them is eventual, and a
+# gate that ignored that would fail on rows that are merely in flight.
+version: 2
+
+models:
+  - name: orders
+    description: "One row per order with its items and payments rolled up (GR1 Listing 4.2)."
+    columns:
+      - name: order_id
+        tests: [unique, not_null]
+      - name: user_id
+        tests:
+          - not_null
+          - relationships:
+              to: ref('silver__users')
+              field: id
+              config:
+                where: "_src_ts < current_timestamp - interval '5' minute"
+      - name: status
+        tests:
+          - accepted_values:
+              values: ['pending', 'paid', 'shipped', 'delivered', 'cancelled']
+      - name: _src_ts
+        tests: [not_null]
+      - name: _ingest_ts
+        tests: [not_null]
+
+  - name: users
+    description: "One row per shopper; order history rolled up; no PII."
+    columns:
+      - name: user_id
+        tests: [unique, not_null]
+      - name: _src_ts
+        tests: [not_null]
+
+  - name: product_sales
+    description: "One row per product: catalogue facts, stock as Silver saw it, sales history."
+    columns:
+      - name: product_id
+        tests: [unique, not_null]
+      - name: category_id
+        tests:
+          - not_null
+          - relationships:
+              to: ref('silver__categories')
+              field: id
+      - name: _src_ts
+        tests: [not_null]
+
+  - name: user_category_affinity
+    description: "Purchases per (shopper, leaf category)."
+    tests:
+      - unique_combination:
+          columns: [user_id, category_id]
+    columns:
+      - name: _src_ts
+        tests: [not_null]

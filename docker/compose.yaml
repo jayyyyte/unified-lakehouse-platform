@@ -23,6 +23,8 @@ volumes:
   postgres-data:
   minio-data:
   kafka-data:
+  nessie-data:     # the Iceberg catalog; must outlive a restart as long as minio-data does
+  spark-state:     # the Bronze stream's checkpoint -- see the pairing guard in bronze_stream.py
 
 services:
 
@@ -206,32 +208,88 @@ services:
   # No healthcheck: the image is built on a minimal base that does not ship curl or
   # wget, so any in-container HTTP probe would fail forever and block dependents.
   # Readiness is probed from the host instead (mosaic.py `up`).
+  #
+  # ROCKSDB, not IN_MEMORY. With an in-memory version store a Nessie restart (or a
+  # Docker Desktop restart, which stops everything) forgets every table while their
+  # data files stay on MinIO and the Bronze stream's checkpoint stays on its volume --
+  # the stream would then resume past everything it had already written, into a
+  # freshly created empty table. /deployments/data is owned by the image's uid 185,
+  # and a fresh named volume inherits that ownership.
   nessie:
     image: ghcr.io/projectnessie/nessie:0.90.4
     container_name: mosaic-nessie
     environment:
       <<: *common-env
-      NESSIE_VERSION_STORE_TYPE: IN_MEMORY    # swap to ROCKSDB/JDBC for persistence
+      NESSIE_VERSION_STORE_TYPE: ROCKSDB
+      NESSIE_VERSION_STORE_PERSIST_ROCKS_DATABASE_PATH: /deployments/data/nessie
+    volumes:
+      - nessie-data:/deployments/data
     ports: ["${NESSIE_PORT:-19120}:19120"]
     networks: [mosaic]
 
   # --------------------------------------------------------------- PROCESSING
-  # Spark Structured Streaming: Debezium topics -> Iceberg Bronze (envelope intact).
+  # Spark Structured Streaming: every Debezium topic -> iceberg.bronze.cdc_events, the
+  # envelope intact and deduplicated on the source position (GR1 section 4.2).
   # Silver and Gold are dbt-trino models -- see docs/adr/0003.
+  #
+  # Bronze is the only Spark job in the system, so it is the container's main process:
+  # `up` starts it, and a stream that dies is an exited container that `up` and
+  # `doctor` report -- not a quietly idle JVM behind `sleep infinity`. Healthy means
+  # the streaming query is active *and* reported progress within the last minute.
   spark:
-    image: apache/spark:3.5.1
+    build:
+      context: ./spark
+    image: mosaic/spark:3.5.1-iceberg1.5.2
     container_name: mosaic-spark
     depends_on:
       kafka: {condition: service_healthy}
       nessie: {condition: service_started}
+      minio-init: {condition: service_completed_successfully}
     environment:
       <<: *common-env
       AWS_ACCESS_KEY_ID: minioadmin
       AWS_SECRET_ACCESS_KEY: minioadmin
       AWS_REGION: us-east-1
-    command: ["sleep", "infinity"]   # jobs submitted via spark-submit from scripts/
+      MOSAIC_BRONZE_TRIGGER_SECONDS: "${BRONZE_TRIGGER_SECONDS:-10}"
+    command: ["/opt/spark/bin/spark-submit", "/opt/mosaic/bronze/bronze_stream.py"]
     volumes:
       - ../pipelines/bronze:/opt/mosaic/bronze:ro
+      - ../domains:/opt/mosaic/domains:ro          # topics are derived from the connectors
+      - ./spark/spark-defaults.conf:/opt/spark/conf/spark-defaults.conf:ro
+      - spark-state:/opt/mosaic/state
+    ports: ["${SPARK_UI_PORT:-4040}:4040"]
+    networks: [mosaic]
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import json,sys,time; s=json.load(open('/tmp/mosaic-bronze/status.json')); sys.exit(0 if s['active'] and time.time()-s['written_at']<60 else 1)"]
+      interval: 15s
+      timeout: 5s
+      retries: 6
+      start_period: 180s
+
+  # Silver and Gold: dbt models compiled to Trino SQL, writing Iceberg through MERGE INTO
+  # (ADR 0003). A one-shot job, not a service -- `python mosaic.py dbt [args]` runs it,
+  # so it sits behind a profile and `up` never waits on it.
+  #
+  # MOSAIC_SOURCE_TZ is the zone the *source databases* write wall-clock DATETIMEs in.
+  # Debezium ships a MySQL DATETIME as that wall clock encoded as if it were UTC, so
+  # Silver needs the zone to turn it into an instant. MySQL here runs time_zone=SYSTEM,
+  # i.e. the container TZ above; change both together or Silver shifts every timestamp.
+  dbt:
+    build:
+      context: ./dbt
+    image: mosaic/dbt:1.8
+    container_name: mosaic-dbt
+    profiles: [transform]
+    depends_on:
+      trino: {condition: service_healthy}
+    environment:
+      <<: *common-env
+      MOSAIC_SOURCE_TZ: Asia/Ho_Chi_Minh
+      MOSAIC_TRINO_HOST: trino
+      MOSAIC_TRINO_PORT: "8080"
+    volumes:
+      - ../pipelines/transform:/opt/mosaic/transform
+      - ../domains:/opt/mosaic/domains:ro          # connectors -> Silver; gold/ -> Gold
     networks: [mosaic]
 
   # ------------------------------------------------------------------ SERVING
@@ -243,8 +301,18 @@ services:
       minio: {condition: service_healthy}
       mysql: {condition: service_healthy}
       postgres: {condition: service_healthy}
+    # Heap is fixed at -Xmx3G in trino/jvm.config; this limit is the backstop above it.
+    # Without either, the image sizes its heap to 80% of the Docker VM and the container
+    # drifts to 6-7 GiB on a small-scale dbt build.
+    mem_limit: 6g
+    environment:
+      # glibc otherwise opens up to 8 malloc arenas per CPU (128 here) for ~370 threads.
+      # Measured 2026-10-16, same workload: off-heap 1.47 -> 0.87 GiB, container peak
+      # 4.53 -> 3.93 GiB, dbt build no slower.
+      MALLOC_ARENA_MAX: "2"
     volumes:
       - ./trino/catalog:/etc/trino/catalog:ro
+      - ./trino/jvm.config:/etc/trino/jvm.config:ro
     ports: ["${TRINO_PORT:-8090}:8080"]
     networks: [mosaic]
     healthcheck:
