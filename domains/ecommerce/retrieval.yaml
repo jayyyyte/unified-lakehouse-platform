@@ -1,0 +1,63 @@
+# domains/ecommerce/retrieval.yaml -- what the generic core is allowed to know about
+# this domain. Validated by platform/spec/retrieval_spec.py; every identifier here
+# reaches platform/ and pipelines/embeddings/ as an opaque string.
+#
+# Sections are added milestone by milestone. M4 uses `datasets` (registered into
+# platform.datasets) and `embeddings` (the slow channel's index). M6 adds `channels`
+# and `fusion`. Design record: docs/adr/0006-m4-embedding-pipeline.md.
+version: 1
+domain: ecommerce
+
+entity:
+  name: product          # what a ranked result is
+  key: product_id        # its identifier in every dataset below
+
+# Every relation this domain materialises, and the column that carries per-row source
+# time (CLAUDE.md: per-entity freshness is read inline, never materialised).
+#
+# freshness_sla_seconds is T_sla in GR1 Eq. 5.1. The values keep the *ratio* PROBLEM.md
+# describes (vector index >> Gold > Silver > Bronze) at a compressed time scale that a
+# demo and E4 can actually run in: hours become 30 minutes, minutes become 5. They are
+# declarations, not schedules -- nothing refreshes Silver/Gold or the index on a timer
+# (ADR 0006, decision M4-C1).
+#
+# Id grammar: a three-part id is a Trino relation (catalog.schema.table); an id that
+# starts with "postgres." is <database>.<schema>.<table> in the PostgreSQL container.
+# The Bronze table is shared by every domain and is registered by the platform itself
+# (platform/freshness/datasets.yaml), not here.
+datasets:
+  - {id: iceberg.silver.orders,          kind: silver, row_timestamp_column: _src_ts, freshness_sla_seconds: 300}
+  - {id: iceberg.silver.order_items,     kind: silver, row_timestamp_column: _src_ts, freshness_sla_seconds: 300}
+  - {id: iceberg.silver.payments,        kind: silver, row_timestamp_column: _src_ts, freshness_sla_seconds: 300}
+  - {id: iceberg.silver.users,           kind: silver, row_timestamp_column: _src_ts, freshness_sla_seconds: 300}
+  - {id: iceberg.silver.products,        kind: silver, row_timestamp_column: _src_ts, freshness_sla_seconds: 300}
+  - {id: iceberg.silver.categories,      kind: silver, row_timestamp_column: _src_ts, freshness_sla_seconds: 300}
+  - {id: iceberg.silver.inventory,       kind: silver, row_timestamp_column: _src_ts, freshness_sla_seconds: 300}
+  - {id: iceberg.gold.orders,            kind: gold,   row_timestamp_column: _src_ts, freshness_sla_seconds: 300}
+  - {id: iceberg.gold.users,             kind: gold,   row_timestamp_column: _src_ts, freshness_sla_seconds: 300}
+  - {id: iceberg.gold.product_sales,     kind: gold,   row_timestamp_column: _src_ts, freshness_sla_seconds: 300}
+  - {id: iceberg.gold.user_category_affinity, kind: gold, row_timestamp_column: _src_ts, freshness_sla_seconds: 300}
+  - {id: iceberg.gold.product_catalog,   kind: gold,   row_timestamp_column: _src_ts, freshness_sla_seconds: 300}
+
+# The slow channel's index (M4). One entry per index; its target is registered as a
+# `vector` dataset automatically, with refreshed_at as its row timestamp.
+embeddings:
+  - id: product_text
+    model: sentence-transformers/all-MiniLM-L6-v2   # baked into docker/jobs at a pinned revision
+    dimensions: 384
+    source:
+      dataset: iceberg.gold.product_catalog   # GR1 section 4.1: "the Gold-layer product catalog"
+      key: product_id
+      # Joined with ". " in this order, empty parts skipped. Slow-moving facts only:
+      # price and stock are never embedded (M4-C3) -- they live in `snapshot` below.
+      text: [name, description, category_name]
+      # Only what is purchasable at refresh time enters the index (M4-A1). A product
+      # that sells out after the refresh stays in it: that is the L0 stale hit.
+      eligible: "stock_qty > 0"
+      # Copied from the source row at refresh time and stored beside the vector, so a
+      # result can show what the index *believed* when it was built.
+      snapshot: [stock_qty, price]
+    target:
+      dataset: postgres.ecommerce_md.public.product_embeddings
+    index: {method: hnsw, m: 16, ef_construction: 64}   # GR1 Appendix A; E3 sweeps these
+    freshness_sla_seconds: 1800

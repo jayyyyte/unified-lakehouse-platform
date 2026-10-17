@@ -51,6 +51,18 @@ models:
       - name: _src_ts
         tests: [not_null]
 
+  - name: product_catalog
+    description: "One row per product: embedded text + the stock/price the index snapshots (ADR 0006)."
+    columns:
+      - name: product_id
+        tests: [unique, not_null]
+      - name: name
+        tests: [not_null]
+      - name: category_name
+        tests: [not_null]
+      - name: _src_ts
+        tests: [not_null]
+
   - name: user_category_affinity
     description: "Purchases per (shopper, leaf category)."
     tests:

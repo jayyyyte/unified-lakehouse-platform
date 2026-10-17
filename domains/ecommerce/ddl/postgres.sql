@@ -48,20 +48,24 @@ CREATE TABLE IF NOT EXISTS inventory (
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
--- ---- product_embeddings (pgvector; NOT a CDC source, populated by pipeline) ----
--- 384-dim vectors from a sentence-transformers model (all-MiniLM-L6-v2).
--- refreshed_at is the freshness signal consumed by the Freshness Registry (N1)
--- and by last_refresh(d) in GR1 Eq. 5.1.
-CREATE TABLE IF NOT EXISTS product_embeddings (
-    product_id   BIGINT      PRIMARY KEY REFERENCES products(id),
-    embedding    vector(384) NOT NULL,
-    refreshed_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-
--- HNSW index for approximate top-k nearest-neighbour (cosine distance).
-CREATE INDEX IF NOT EXISTS idx_prod_emb_hnsw
-    ON product_embeddings USING hnsw (embedding vector_cosine_ops)
-    WITH (m = 16, ef_construction = 64);
+-- ---- product_embeddings: created by the embedding pipeline, not here (M4) ----
+-- GR1 Appendix A defined this table in the source DDL as (product_id PK REFERENCES
+-- products(id), embedding vector(384), refreshed_at) with an HNSW index. M4 moves its
+-- definition into the pipeline (pipelines/embeddings, driven by retrieval.yaml), which
+-- builds a fresh table beside the live one on every refresh and swaps it in atomically:
+--
+--   product_id   BIGINT PRIMARY KEY      -- no foreign key, see below
+--   embedding    vector(384) NOT NULL
+--   stock_qty, price                     -- snapshot of the fast facts at refresh time
+--   refreshed_at TIMESTAMPTZ NOT NULL    -- watermark of the Gold data read (N1 signal)
+--   embedded_at  TIMESTAMPTZ NOT NULL    -- wall clock of the job
+--   + HNSW (embedding vector_cosine_ops) WITH (m = 16, ef_construction = 64)
+--
+-- The foreign key to products is dropped on purpose: a derived index must never be able
+-- to block a write to the system of record (a DELETE of an indexed product would fail),
+-- and the index is *meant* to describe products as they were at refresh time.
+-- It stays out of mosaic_pub: it is derived data, not a CDC source.
+-- Rationale for every column: docs/adr/0006-m4-embedding-pipeline.md.
 
 -- ---- CDC heartbeat sink (advances confirmed_flush_lsn; guards WAL bloat) ----
 -- This table MUST be part of mosaic_pub below, and it was not until M2 measured the
