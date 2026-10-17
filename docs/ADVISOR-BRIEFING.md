@@ -47,7 +47,8 @@ thiết kế GR1 *không thể* chạy như đã viết**, mỗi chỗ đều t�
 | M1 | Sources, seed corpus, load generator, live CDC | done, verified |
 | M2 | CDC restart safety + WAL guard | done, verified |
 | **M3** | **Medallion on Iceberg: Spark Bronze, dbt-trino Silver/Gold** | **done, verified 2026-10-05 (mới so với lần briefing M2)** |
-| M4–M8 | Federation/embedding, freshness registry, fusion engine, experiments, governance | chưa bắt đầu |
+| **M4** | **Embedding pipeline (kênh chậm) + đăng ký dataset** | **done, verified 2026-10-16: L0 tái hiện end-to-end; quyết định ở ADR 0006** |
+| M5–M8 | Freshness registry, fusion engine, experiments, governance | chưa bắt đầu |
 
 Một câu về quy mô: mọi thứ chạy ở mức `small` (~86k dòng seed, ~140k sau khi load generator ghi thêm).
 Lần chạy 10M dòng cho E2 được **cố ý hoãn** cho tới khi hình dạng pipeline không còn thay đổi, vì mỗi
@@ -156,8 +157,13 @@ Sau đó chỉ vào bảng kết quả: `missing` bằng 0 ở mọi dòng, còn
 
 ## 5. What is next (việc tiếp theo, 1 phút)
 
-**M4: embedding pipeline**, sau đó đăng ký dataset cho **M5 (N1 Freshness Registry)**. Chu kỳ batch
-của embedding *chính là* độ cũ của kênh chậm, nên nó phải được chọn và ghi lại có chủ đích.
+*(Cập nhật 2026-10-16: M4 đã xong. Index chỉ chứa sản phẩm còn hàng lúc refresh kèm ảnh chụp tồn
+kho, nên khi một sản phẩm hết hàng sau refresh, index vẫn trả nó "còn hàng": L0 giờ là một lệnh,
+`python mosaic.py embed-verify`. Câu nên chuẩn bị trả lời: "sao không lọc theo tồn kho sống lúc
+query?". Câu trả lời đã chốt là đưa post-filter vào E4 làm baseline thứ hai, xem ADR 0006 M4-A2.)*
+
+**M5: N1 Freshness Registry.** Câu hỏi cần bàn trước: khi nguồn đứng yên, watermark nên là
+`max(_src_ts)` (báo "cũ 11 ngày" cho một hệ khoẻ) hay mốc heartbeat đã xác nhận (STATUS finding 20).
 
 Hai quyết định nên đem ra bàn:
 - giữ partition spec `gold.orders` của GR1 §4.3 hay chuyển sang theo tháng (A12);

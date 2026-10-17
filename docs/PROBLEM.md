@@ -233,8 +233,10 @@ platform**, dưới dạng một domain thứ hai chạy trên nó mà không ph
  [M8] N3 Governance: tag PII lan theo lineage; jobmarket domain; console demo
 ```
 
-**Đã chạy và kiểm chứng (tới M3):** mọi thứ từ nguồn tới Gold.
-**Chưa làm (M4–M8):** embedding, Freshness Registry, fusion engine, thí nghiệm E1–E4, governance,
+**Đã chạy và kiểm chứng (tới M4):** mọi thứ từ nguồn tới Gold, cộng kênh chậm (vector index). **L0
+tái hiện được bằng một lệnh** (`python mosaic.py embed-verify`), xem
+[ADR 0006](adr/0006-m4-embedding-pipeline.md) về việc kênh chậm "sai" thế nào chứ không chỉ "già".
+**Chưa làm (M5–M8):** Freshness Registry, fusion engine, thí nghiệm E1–E4, governance đầy đủ,
 domain thứ hai, console.
 
 ---

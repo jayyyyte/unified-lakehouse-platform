@@ -2,7 +2,7 @@
 
 **Bản ghi đầy đủ về việc bản implement khác `GR1_report.md` ở đâu, và tại sao.**
 
-Last updated: 2026-10-16 · Covers milestones M0–M3 (M3 complete)
+Last updated: 2026-10-16 · Covers milestones M0–M4 (M4 complete)
 
 > *Bản song ngữ: diễn giải tiếng Việt, giữ thuật ngữ tiếng Anh và giữ nguyên trích dẫn gốc từ GR1
 > (để dẫn lại khi viết báo cáo). Thuật ngữ khó tra ở
@@ -55,6 +55,7 @@ qua được là một số **cấu hình cụ thể** trong Appendix B và C, v
 | A10 | **"Replay capability" của §4.2 hết hạn theo Kafka retention**: hai lần không bootstrap được Bronze từ topic; sau 10 ngày dừng máy thì mọi topic bảng đều rỗng | Finding | — |
 | A11 | **MySQL `DATETIME` đến lệch 7 tiếng**: Debezium mã hoá giờ địa phương không có múi giờ như thể là UTC; việc chuẩn hoá mà §4.4 giao cho SMT `TimestampConverter` phải chuyển sang Silver | Finding | (xem A1) |
 | A12 | **Partitioning `gold.orders` của §4.3 quá mịn cho prototype**: 2,944 phân vùng, trung bình 12.6 dòng; build vượt giới hạn writer mặc định của Trino; `ANALYZE` chậm 33 lần và full scan chậm 14 lần so với cùng dữ liệu không phân vùng | Finding | — |
+| A13 | **Ở quy mô prototype, planner của PostgreSQL bỏ qua index HNSW**: một query "ANN" không pin access path thực chất là tìm chính xác, nên phép so sánh HNSW vs exact của §4.5 (Track 2) cho kết quả vô nghĩa nếu không pin từng đường đi | Finding | [0006](adr/0006-m4-embedding-pipeline.md) |
 | B1 | Apache Ranger → Open Policy Agent | Substitution | [0001](adr/0001-opa-instead-of-ranger.md) |
 | B2 | DataHub → OpenLineage + Marquez | Substitution | [0002](adr/0002-marquez-instead-of-datahub.md) |
 | B3 | Spark (Silver/Gold) + Great Expectations → dbt-trino | Substitution | [0003](adr/0003-dbt-trino-for-silver-gold.md) |
@@ -83,6 +84,8 @@ qua được là một số **cấu hình cụ thể** trong Appendix B và C, v
 | D13 | dbt chạy trong container riêng (`mosaic/dbt:1.8`), sau profile `transform` | Operational | [0003](adr/0003-dbt-trino-for-silver-gold.md) |
 | D14 | Nâng `iceberg.max-partitions-per-writer` của Trino từ 100 lên 5000 | Operational | (xem A12) |
 | D15 | Load generator lấy vùng miền từ bộ từ vựng của seed | Operational | — |
+| D16 | `product_embeddings` do pipeline tạo (không còn trong DDL nguồn), **bỏ FK** tới `products`, thêm cột snapshot + `embedded_at`; thêm Gold `product_catalog` làm nguồn | Operational | [0006](adr/0006-m4-embedding-pipeline.md) |
+| D17 | Checkpoint Bronze trên named volume bị **rách** (file 0 byte) khi Docker Desktop dừng cứng; khôi phục bằng cách cất file rách sang chỗ khác | Operational | — |
 
 ---
 
@@ -780,6 +783,69 @@ dòng.
 
 ---
 
+## A13. At prototype scale the planner skips the HNSW index, so §4.5's comparison is vacuous unless pinned
+
+*(Ở quy mô prototype, planner bỏ qua index HNSW; phép so sánh của §4.5 vô nghĩa nếu không pin đường đi)*
+
+### What GR1 says (GR1 nói gì)
+
+§4.5, Track 2: *"its experiment design sweeps the M and ef_search parameters, plots recall at k against
+latency, compares the HNSW index against exact brute-force search, and reports the 50th-, 95th-, and
+99th-percentile latency together with the memory overhead of the index."* Appendix A tạo index
+`USING hnsw (embedding vector_cosine_ops) WITH (m = 16, ef_construction = 64)` và gợi ý query
+`ORDER BY e.embedding <=> :q`.
+
+### What actually happens (thực tế)
+
+Index HNSW được tạo đúng như Appendix A. Nhưng **có index không có nghĩa là index được dùng**: PostgreSQL
+chọn access path theo cost model, và với 946 vector (quy mô `small`) thì sequential scan + sort rẻ hơn:
+
+```
+-- không pin (mặc định)
+Limit  (cost=230.56..230.59 rows=10)
+  ->  Sort  (Sort Key: embedding <=> $0)
+        ->  Seq Scan on product_embeddings  (rows=946)
+
+-- SET enable_seqscan = off
+Limit  (cost=416.94..430.92 rows=10)
+  ->  Index Scan using product_embeddings_hnsw  (Order By: embedding <=> $0)
+```
+
+Lần query đầu tiên của M4 in ra `plan uses hnsw index: False`. Nghĩa là "kênh ANN" lúc đó **thực chất
+là tìm chính xác**, và nếu chạy thí nghiệm Track 2 như viết thì:
+
+- đường "HNSW" và đường "exact" là **cùng một plan**, nên recall luôn bằng 1.0 và latency trùng nhau;
+- sweep `ef_search` cho ra một **đường cong phẳng**, vì tham số đó chỉ có tác dụng khi index được dùng.
+
+Kết quả trông giống "HNSW hoàn hảo", nhưng thật ra không đo được gì về HNSW.
+
+### What we do instead (ta làm gì thay thế)
+
+Mỗi đường đi **pin access path** của mình (`pipelines/embeddings/ann.py`, `_set_path`):
+HNSW = `enable_seqscan = off`; exact = `enable_indexscan = off`. Thêm vào đó, mỗi lần đo đều chạy
+`EXPLAIN` trước và **fail** nếu một đường đi không dùng đúng plan nó tuyên bố. Kênh ANN được định nghĩa
+là xấp xỉ (§3.4), nên pin nó vào HNSW đúng với định nghĩa; ở quy mô lớn planner tự chọn HNSW, và việc
+pin trở thành vô hại.
+
+### Evidence (bằng chứng)
+
+Sau khi pin: exact p50 0.58–0.85 ms (sequential scan xác nhận bằng plan), HNSW `ef_search` 10/40/100
+p50 0.34–0.71 ms (index scan xác nhận bằng plan), recall@10 = 1.0 trên 100 query. Recall 1.0 lúc này **có
+nghĩa**: HNSW đã thật sự chạy và trùng đáp án chính xác, điều dự kiến ở 946 dòng.
+
+### Impact on GR1's claims
+
+Thiết kế thí nghiệm Track 2 vẫn đúng, nhưng thiếu một điều kiện tiên quyết: **phải pin access path và
+kiểm plan**. Nên ghi điều này thành một dòng trong phần phương pháp của E3. Chưa kiểm ở quy mô `full`
+(100k vector) xem planner có tự chọn HNSW không: **unverified**.
+
+### Status
+
+**Fixed and verified** (M4, 2026-10-16). Ledger: `experiments/results/embedding_events.jsonl`, event
+`recall`, trường `plans_ok`.
+
+---
+
 # Part B — Substitutions: cùng cam kết, công cụ nhẹ hơn
 
 Mỗi mục giữ đúng điều GR1 *hứa*, và chỉ đổi thứ *thực hiện* lời hứa đó. Trong báo cáo, trình bày nhất
@@ -988,6 +1054,13 @@ query đọc nó trực tiếp. **Chỉ watermark mức dataset được lưu.**
 *(Cập nhật M3: watermark của bảng do Trino ghi, tức Silver/Gold, phải đọc từ dữ liệu chứ không từ
 snapshot summary, xem C8 và STATUS finding 12.)*
 
+*(Cập nhật M4: `python mosaic.py register` đã đăng ký 14 dataset vào `platform.datasets` (Bronze, 7
+Silver, 5 Gold, 1 vector), mỗi dataset được probe thật trước khi ghi, theo kiểu tất cả hoặc không gì cả.
+Lần probe đầu cho thấy **bài toán nguồn nhàn rỗi** mà collector M5 phải giải: Bronze trễ 20 s vì heartbeat
+CDC vẫn chảy qua nó, trong khi mọi bảng Silver/Gold "trễ" 11 ngày chỉ vì nguồn không có thay đổi nào.
+Watermark theo event-time không phân biệt được "đứng yên" với "kẹt". Xem
+[ADR 0006](adr/0006-m4-embedding-pipeline.md), M4-A3, M4-B4.)*
+
 ---
 
 ## C3. N2 — the freshness-aware fusion engine
@@ -1007,6 +1080,19 @@ work within GR1."* Nó đưa ra Eq. 5.1 (staleness) và Eq. 5.2 (freshness-weigh
 Mọi kết quả đều mang **provenance** (nguồn gốc): kênh nào đóng góp, xếp hạng bao nhiêu trong từng kênh,
 độ cũ quan sát được, hệ số decay đã áp. Provenance làm cho khác biệt giữa các policy *đọc được* trong
 năm phút mà giám khảo dành cho một demo, và đó cũng là thứ thí nghiệm E4 đọc lại.
+
+**Baseline thứ hai, chốt ở M4 (ADR 0006, M4-A2): "post-filter trên nguồn sống".** Câu phản biện tự
+nhiên nhất với cả đề tài là: *"sao không lọc kết quả ANN theo tồn kho sống lúc query?"*. E4 sẽ trả lời
+bằng số đo, không bằng lời. Post-filter là câu trả lời đúng cho **một domain biết rõ fact nào hay đổi**.
+Nó cần tri thức domain trong runner (cột nào nghĩa là "còn bán được"), thêm một lượt gọi về OLTP mỗi
+query, và một bộ lọc riêng cho từng loại fact nhanh. Freshness-weighted fusion claim một thứ khác: một
+cơ chế **generic**, chỉ cần watermark. E4 phải cho thấy cái giá của sự generic (nDCG thấp hơn
+post-filter bao nhiêu), chứ không giả vờ rằng không có cái giá đó.
+
+**Kênh ANN đã có từ M4, và nó "sai" theo đúng cách L0 mô tả.** Index chỉ chứa thực thể **đủ điều kiện
+lúc refresh** và lưu kèm ảnh chụp các fact nhanh (M4-A1). `embed-verify` đã tái hiện L0 end-to-end:
+stockout kết quả #1 (sản phẩm 342, tồn kho sống 160 → 0), index vẫn trả nó ở #1 với `stock_qty=160`;
+build lại Gold và refresh index thì nó biến mất.
 
 ---
 
@@ -1033,6 +1119,13 @@ trong chính thiết kế của nó.
   trực tiếp hay do lan truyền. Nếu có, **job từ chối chạy.**
 
 Điều đó biến *"PII không thể vào vector index"* từ một quy ước thành một thuộc tính được cưỡng chế.
+
+*(Cập nhật M4: **chốt chặn đã tồn tại và đã được nối vào** job embedding duy nhất hiện có
+(`platform/governance/guard.py`). Negative control đã chạy: gắn `sensitive` lên
+`gold.product_catalog.description` thì refresh thoát với mã 2 (REFUSED) và index không bị đụng tới; gỡ
+tag thì pass. **Lan truyền tag theo lineage chưa có (M8)**: hiện guard chỉ chặn được những gì được ghi
+thẳng vào `column_tags`, và mỗi lần chạy nó in ra số tag đang biết để một kho tag rỗng không bị đọc nhầm
+thành "đã an toàn". ADR 0006, M4-B3.)*
 
 ---
 
@@ -1179,6 +1272,8 @@ Mang tính cơ học, không ảnh hưởng claim của kiến trúc, nhưng là
 | **D13** | dbt chạy trong image riêng (`dbt-core 1.8.8`, `dbt-trino 1.8.3`), sau compose profile `transform`, qua `python mosaic.py dbt` | Python trên host (3.14) mới hơn mức dbt-core hỗ trợ, và một image đã pin khiến mọi lần build dùng cùng một dbt. Là job chạy một lần nên `up` không bao giờ đợi nó. |
 | **D14** | Trino `iceberg.max-partitions-per-writer=5000` (mặc định 100) | Bắt buộc để chạy được partition spec `gold.orders` của GR1 §4.3 (A12). |
 | **D15** | `tools/loadgen` lấy region từ `tools/seed/vocab.py` | Hai generator dùng hai bộ từ vựng region riêng (tên thành phố vs. `north`/`central`/…), nên mọi số tổng hợp theo region bị tách đôi, chỉ thấy được khi Gold group theo region. Đã sửa từ nay về sau; các dòng đã ghi giữ giá trị cũ. |
+| **D16** | `product_embeddings` do **pipeline** tạo lại ở mỗi refresh (build bảng mới, swap nguyên tử), không còn nằm trong DDL nguồn. **Bỏ FK** `REFERENCES products(id)`. Thêm cột snapshot (`stock_qty`, `price`) và `embedded_at`. Thêm Gold `product_catalog` làm nguồn | GR1 Appendix A khai báo bảng trong DDL nguồn với FK tới `products`. (1) Một index *dẫn xuất* không bao giờ được phép chặn một lần ghi vào system of record: xoá một sản phẩm đang được index sẽ lỗi. (2) Index được *thiết kế* để mô tả sản phẩm như lúc refresh (M4-A1). (3) Publish nguyên tử cần build bảng mới rồi swap, nên định nghĩa bảng phải nằm ở pipeline. `gold.product_sales` không có mô tả hay tên category nên thêm `product_catalog`, đúng chữ *"Gold-layer product catalog"* của §4.1. Bảng vẫn **ngoài** `mosaic_pub` (đã kiểm). Xem [ADR 0006](adr/0006-m4-embedding-pipeline.md). |
+| **D17** | Khôi phục checkpoint Bronze bị rách: cất `offsets/1890–1891` và `commits/1890–1891` (đều **0 byte**) sang `checkpoints/bronze.torn-2026-10-16/` | Docker Desktop dừng cứng ngày 2026-10-16. Khi bật lại, stream chết với `Failed to read log file .../offsets/1891. Incomplete log file`. Bốn file đã được rename vào chỗ nhưng nội dung chưa từng được flush xuống đĩa: checkpoint trên named volume **không bền khi VM bị dừng cứng**. Cặp nguyên vẹn gần nhất là 1889, nên Spark chạy lại từ batch 1890. Idempotency key của Bronze hấp thụ phần đã ghi: *"2 already in Bronze"*. Đây là một lần nữa chứng minh exactly-once, lần này đến từ sự cố thật chứ không phải test. Cất đi, không xoá, cùng tinh thần với `bronze.stale-2026-09-23`. |
 
 ### A debugging note worth keeping (D9)
 

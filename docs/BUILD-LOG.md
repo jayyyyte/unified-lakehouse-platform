@@ -3,7 +3,7 @@
 **Ghi chép theo ngày và theo milestone: đã xây gì, kiểm chứng thế nào, và mỗi lần chạy thực sự đo
 được gì.**
 
-Last updated: 2026-10-16 · Covers M0–M3 (M3 complete)
+Last updated: 2026-10-16 · Covers M0–M4 (M4 complete)
 
 > Thuật ngữ khó tra ở
 > [PROBLEM.md, Phụ lục C](PROBLEM.md#phụ-lục-c--bảng-thuật-ngữ-glossary).*
@@ -23,12 +23,13 @@ Last updated: 2026-10-16 · Covers M0–M3 (M3 complete)
 4. [M2 — CDC restart safety và WAL guard](#4-m2--cdc-restart-safety-và-wal-guard)
 5. [M3 — Medallion on Iceberg](#5-m3--medallion-on-iceberg)
 6. [Sau M3 — giới hạn bộ nhớ Trino](#6-sau-m3--giới-hạn-bộ-nhớ-trino-2026-10-1316)
-7. [Deliverables: bản đồ file theo milestone](#7-deliverables-bản-đồ-file-theo-milestone)
-8. [Environment facts đã xác lập](#8-environment-facts-đã-xác-lập)
-9. [Command reference](#9-command-reference)
-10. [Độ phủ KPI của GR1 Table 4.4](#10-độ-phủ-kpi-của-gr1-table-44)
-11. [Những gì CHƯA được kiểm chứng](#11-những-gì-chưa-được-kiểm-chứng)
-12. [Run ledgers](#12-run-ledgers)
+7. [M4 — Embedding pipeline (kênh chậm) và đăng ký dataset](#7-m4--embedding-pipeline-kênh-chậm-và-đăng-ký-dataset)
+8. [Deliverables: bản đồ file theo milestone](#8-deliverables-bản-đồ-file-theo-milestone)
+9. [Environment facts đã xác lập](#9-environment-facts-đã-xác-lập)
+10. [Command reference](#10-command-reference)
+11. [Độ phủ KPI của GR1 Table 4.4](#11-độ-phủ-kpi-của-gr1-table-44)
+12. [Những gì CHƯA được kiểm chứng](#12-những-gì-chưa-được-kiểm-chứng)
+13. [Run ledgers](#13-run-ledgers)
 
 ---
 
@@ -74,6 +75,7 @@ trích từ output thật, không bao giờ trích từ kỳ vọng.
 | 2026-10-05 | Viết idempotency key; mọi topic đã bị retention xoá (A10, lần 2) → resnapshot; chứng minh exactly-once, đo latency, dbt Silver/Gold, reconcile | M3 **đóng 10-05** |
 | 2026-10-13 | Đo được: build incremental 0 dòng vẫn tốn 45–61 s ở `gold.orders`, đẩy heap Trino lên 6+ GiB | sau M3 |
 | 2026-10-16 | Giới hạn bộ nhớ Trino (`-Xmx3G`, `mem_limit 6g`, `MALLOC_ARENA_MAX=2`), đo lại | sau M3 |
+| 2026-10-16 | Chốt 13 quyết định M4 trước khi code (ADR 0006); commit M3 (`c24134a`); khôi phục checkpoint Bronze bị rách (D17); dựng embedding pipeline + registry; phát hiện A13; `embed-verify --with-refresh` 7/7 PASS, **L0 tái hiện end-to-end** | M4 **đóng 10-16** |
 
 | | Milestone | State | Date closed | Evidence |
 |---|---|---|---|---|
@@ -81,7 +83,7 @@ trích từ output thật, không bao giờ trích từ kỳ vọng.
 | **M1** | Sources, seed corpus, load generator, CDC live | **done, verified** | 2026-08-28 | `cdc-verify` pass cả hai nguồn; số dòng loadgen khớp chính xác |
 | **M2** | CDC ingestion + restart-safety demo | **done, verified** | **2026-09-08** | `restart-safety` PASS, `wal-guard` PASS (sau một bản sửa do chính M2 phát hiện ra) |
 | **M3** | Medallion on Iceberg (Spark Bronze, dbt-trino Silver/Gold) | **done, verified** | **2026-10-05** | `bronze-verify exactly-once` + `replay` PASS; đo KPI latency; `reconcile` khớp tuyệt đối sau MERGE dưới tải |
-| M4 | Trino federation + embedding pipeline | catalog xong từ M0 | — | embedding chưa bắt đầu |
+| **M4** | Trino federation + embedding pipeline | **done, verified** | **2026-10-16** | `embed-verify --with-refresh` 7/7 PASS: counts, semantics, recall (plan đã kiểm), guard, no drift, **L0 stale hit**, L0 fixed; `register` 14 dataset |
 | M5 | N1 Freshness Registry | có schema, chưa có collector | — | — |
 | M6 | N2 Retrieval + fusion engine | chưa bắt đầu | — | — |
 | M7 | Experiments E1–E4 | chưa bắt đầu | — | — |
@@ -607,7 +609,120 @@ Pool chỉ đạt đỉnh 19 MiB trong khi container ngồi ở 6 GiB.
 
 ---
 
-## 7. Deliverables: bản đồ file theo milestone
+## 7. M4 — Embedding pipeline (kênh chậm) và đăng ký dataset
+
+**Đóng:** 2026-10-16 · **Ghi chép trực tiếp.** Mọi quyết định thiết kế được hỏi và chốt **trước khi**
+viết code, và ghi đầy đủ lý do ở [ADR 0006](adr/0006-m4-embedding-pipeline.md). Các mã `M4-xx` dưới đây
+trỏ vào ADR đó.
+
+### 7.1 Mục tiêu
+
+Dựng **kênh chậm** của L0, tức một vector index trên pgvector, sao cho nó **cũ theo đúng cách L0 mô
+tả**: không chỉ "già", mà **sai** về những thứ đã đổi sau lần refresh. Đồng thời đăng ký mọi dataset vào
+`platform.datasets`, làm điểm bàn giao cho N1 (M5).
+
+Câu hỏi then chốt (ADR 0006, phần Context): embedding chỉ mã hoá ý nghĩa của mô tả, mà mô tả thì load
+generator cố ý không bao giờ sửa. Nếu chỉ "embed mô tả" thì index cũ 6 tiếng giống hệt index mới, và E4
+sẽ đo một hiệu ứng không tồn tại. Lời giải (M4-A1): index chỉ chứa sản phẩm **còn hàng lúc refresh**,
+kèm **ảnh chụp** `stock_qty`/`price` tại thời điểm đó.
+
+### 7.2 Giai đoạn 0: dọn đường (2026-10-16)
+
+| Việc | Kết quả |
+|---|---|
+| Commit toàn bộ code M3 chưa từng được commit (M4-D1) | `c24134a`: Bronze stream, image Spark/dbt, Gold models, giới hạn Trino, signal channel |
+| Bật lại stack sau khi Docker Desktop dừng cứng | 9/10 healthy; **Bronze stream chết**: `Failed to read log file .../offsets/1891. Incomplete log file` |
+| Chẩn đoán checkpoint | `offsets/1890`, `offsets/1891`, `commits/1890`, `commits/1891` đều **0 byte**: rename đã xảy ra nhưng nội dung chưa từng được flush xuống đĩa trước khi VM dừng. Cặp nguyên vẹn gần nhất: 1889 |
+| Khôi phục (D17) | Cất bốn file rỗng sang `checkpoints/bronze.torn-2026-10-16/` (không xoá). Spark chạy lại từ batch 1890: **"2 already in Bronze"**, idempotency key chặn đúng phần đã ghi. Exactly-once được chứng minh thêm một lần, lần này từ sự cố thật |
+
+### 7.3 Đầu việc
+
+| # | Đầu việc | Cách làm | Output | Kết quả |
+|---|---|---|---|---|
+| 1 | Spec của domain (M4-B2) | `retrieval.yaml` khai báo entity, 12 dataset với SLA, và index (nguồn, khoá, cột text, predicate `eligible`, cột snapshot, đích, model, HNSW, SLA). Validator viết tay, báo lỗi chỉ đúng key | `domains/ecommerce/retrieval.yaml`, `platform/spec/retrieval_spec.py` | spec sai (index trỏ tới dataset chưa khai báo) bị từ chối, thông báo chỉ đúng chỗ |
+| 2 | Gold catalog (M4-B2a) | Model mới: text (tên, mô tả, tên category lá) + hai fact nhanh | `domains/ecommerce/gold/product_catalog.sql` | 1,000 dòng, 946 còn hàng = nguồn sống 946; dbt toàn project **84/84 PASS** |
+| 3 | Image jobs (M4-C4) | Python 3.11, torch CPU, sentence-transformers 3.0.1, psycopg 3; model bake sẵn ở revision `1110a243…`, `HF_HUB_OFFLINE=1` | `docker/jobs/`, service `jobs` (profile `jobs`) | 498 MB; build ~4 phút |
+| 4 | Refresh index (M4-A1, A3, C2) | guard → đọc Gold pin snapshot (một câu lệnh, kèm watermark) → embed → build bảng mới + HNSW → swap trong một transaction | `pipelines/embeddings/index.py` | xem 7.4 |
+| 5 | Đường đọc (query, recall) | top-k cosine kèm snapshot + `refreshed_at`; recall HNSW vs exact, **EXPLAIN từng đường đi** | `pipelines/embeddings/ann.py` | phát hiện A13, xem 7.5 |
+| 6 | Chốt chặn N3 (M4-B3) | đọc `platform.column_tags`, từ chối nếu cột text mang `sensitive`; in số tag đang biết | `platform/governance/guard.py` | negative control pass |
+| 7 | Đăng ký dataset (M4-B4) | probe thật từng dataset, tất cả hoặc không gì cả, xoá dataset không còn khai báo | `platform/freshness/register.py`, `platform/freshness/datasets.yaml` | 14 dataset; spec lệch thì không đăng ký gì |
+| 8 | Gate mở rộng (M4-B2) | quét thêm `pipelines/embeddings/`; miễn trừ đúng cụm `ORDER BY` | `mosaic.py` (`GATED_DIRS`) | bắt được *"inner **product**"* ngay lần đầu |
+| 9 | Kiểm chứng (M4-D3) | sáu kiểm tra có răng, cộng `--with-refresh` | `tools/embeddings/verify.py`, `mosaic.py embed-verify` | **7/7 PASS** |
+
+### 7.4 Số đo: refresh
+
+Ở quy mô `small`, 946 dòng đủ điều kiện trên 1,000 (ledger `embedding_events.jsonl`, event `refresh`):
+
+| Giai đoạn | Thời gian |
+|---|---|
+| đọc Gold qua Trino (pin snapshot) | 0.10–1.18 s |
+| nạp model | 2.9–3.2 s |
+| embed 946 text trên CPU | 4.6–4.9 s (~205 text/s) |
+| `COPY` + build HNSW + swap | 0.12 + 0.14–0.17 + 0.01–0.04 s |
+| **tổng** | **8.1–9.3 s** |
+
+**`refreshed_at` theo watermark hoạt động như thiết kế (M4-A3).** Lần refresh đầu đóng dấu
+`2026-10-05 05:03:20 UTC`, tức "cũ 992,310 s (11.5 ngày) ngay lúc ra đời", vì nguồn không thay đổi gì từ
+hôm đó. Sau khi stockout đi qua Bronze và Gold được build lại, `refreshed_at` nhảy lên
+`2026-10-16 16:45:52`, và index chỉ cũ 33.6 s lúc ra đời (4 s tới Bronze, ~30 s dbt). Còn **refresh lại
+mà không build lại Gold thì không tươi hơn chút nào**: lần cuối giữ nguyên `refreshed_at`, tuổi lúc ra
+đời tăng từ 64 lên 91 s.
+
+### 7.5 Số đo: đường đọc
+
+Trên 100 vector truy vấn lấy mẫu từ index, k = 10, sau khi pin access path:
+
+| Đường đi | p50 | p95 | recall@10 | plan đã kiểm |
+|---|---|---|---|---|
+| exact | 0.58–0.85 ms | 0.73–1.43 ms | 1.0 (định nghĩa) | sequential scan |
+| HNSW `ef_search=10` | 0.34–0.37 ms | 0.41–0.47 ms | 1.0000 | index scan |
+| HNSW `ef_search=40` | 0.53–0.54 ms | 0.69–0.80 ms | 1.0000 | index scan |
+| HNSW `ef_search=100` | 0.57–0.71 ms | 0.76–0.90 ms | 1.0000 | index scan |
+
+Ở 946 dòng, recall 1.0 là điều dự kiến *theo cấu tạo*; đánh đổi thật là việc của E3 ở quy mô `full`.
+
+### 7.6 Số đo: kiểm chứng `embed-verify --with-refresh` (95.8 s)
+
+| Kiểm tra | Kết quả |
+|---|---|
+| counts | index 946 = ledger 946 = số đủ điều kiện đếm lại ở **đúng** Iceberg snapshot đã pin; `refreshed_at` đồng nhất và = `max(_src_ts)` của snapshot đó |
+| semantics | "waterproof hiking backpack" 10/10 Outdoor & Hiking; "wireless noise cancelling headphones for commuting" 10/10 Audio & Headphones; "cast iron skillet for searing" 10/10 Kitchen & Dining |
+| recall | 1.0 ở `ef_search=40`, plan cả hai đường đều đúng |
+| guard | gắn `sensitive` lên `description` → refresh **exit 2 REFUSED**, index không đổi; gỡ tag → exit 0 |
+| no drift | trước khi kéo công tắc: 0/10 kết quả mâu thuẫn với nguồn sống |
+| **L0** | **stockout kết quả #1 (sản phẩm 342, tồn kho sống 160 → 0); index vẫn trả nó ở #1 với `stock_qty=160`; stale-hit rate@10 = 1/10** |
+| L0 fixed | thay đổi tới Bronze sau 4 s → dbt `+product_catalog` → refresh: sản phẩm 342 không còn trong top-10; stale-hit 0/10. Sau đó restock về 160 |
+
+**Đây là lần đầu L0 được tái hiện end-to-end trên stack thật.** Trước M4, lỗi chỉ quan sát được gián tiếp
+(STATUS: "Silver/Gold vẫn ghi 9 trong khi nguồn sống là 0").
+
+### 7.7 Phát hiện của M4
+
+| Mã | Phát hiện | Ghi ở |
+|---|---|---|
+| A13 | Ở 946 vector, planner chọn sequential scan (cost 230) thay vì HNSW (cost 417). Không pin thì "ANN" thực chất là exact, và thí nghiệm Track 2 của §4.5 cho recall 1.0 cùng đường cong `ef_search` phẳng, **vô nghĩa** | CHANGES-FROM-GR1 A13 |
+| D17 | Checkpoint Spark trên named volume không bền khi Docker Desktop dừng cứng: bốn file metadata 0 byte | CHANGES-FROM-GR1 D17 |
+| (M5) | **Bài toán nguồn nhàn rỗi.** Bronze trễ 20 s nhờ heartbeat CDC, còn Silver/Gold "trễ" 11 ngày chỉ vì nguồn đứng yên. Watermark event-time không phân biệt được "đứng yên" với "kẹt" | ADR 0006 M4-A3; CHANGES-FROM-GR1 C2 |
+
+### 7.8 Lỗi tự bắt được trong M4
+
+| Lỗi | Bắt bằng gì | Sửa |
+|---|---|---|
+| Comment *"inner **product**"* trong runner | gate mở rộng, lần chạy đầu | đổi thành "dot similarity" |
+| "HNSW" chạy sequential scan | phép kiểm plan trong `query` (`plan uses hnsw index: False`) | pin access path (A13) |
+| Registry in watermark của dataset vector theo giờ +07 dưới nhãn "UTC" | đọc output: 12:03:20 so với 05:03:20 của mọi dòng khác | đổi sang UTC trước khi in; lag vốn đã đúng |
+| Giả định `_src_ts` của Bronze là `timestamp` không múi giờ | `with_timezone()` báo `FUNCTION_NOT_FOUND` lúc `--with-refresh`; `DESCRIBE` cho thấy là `timestamp(6) with time zone` | bỏ ép kiểu; sửa docstring đã viết sai |
+
+### 7.9 Những gì M4 còn để lại chưa kiểm chứng
+
+- Mọi thứ ở quy mô `small`; planner ở 100k vector có tự chọn HNSW không thì **chưa kiểm**.
+- Lan truyền tag N3 (M8); guard hiện chỉ chặn tag được ghi trực tiếp.
+- Watermark chưa được ghi vào `platform.watermarks` (việc của collector M5); `register` chỉ in bản xem trước.
+- Baseline post-filter của E4 (M4-A2) mới là cam kết, chưa có code.
+
+---
+
+## 8. Deliverables: bản đồ file theo milestone
 
 Chỉ liệt kê file có thật trong cây thư mục.
 
@@ -635,10 +750,20 @@ Chỉ liệt kê file có thật trong cây thư mục.
 | **M3** | **`tools/lakehouse/reconcile.py`** | **tooling** | **Silver so với nguồn sống từng dòng** |
 | **M3** | **`tools/cdc/snapshot.py`, `tools/trino.py`** | **tooling** | **BLOCKING snapshot theo yêu cầu; Trino REST client thư viện chuẩn** |
 | sau M3 | `docker/trino/jvm.config` | config | giới hạn heap Trino `-Xmx3G` |
+| **M4** | **`domains/ecommerce/retrieval.yaml`** | **spec** | **hợp đồng domain: entity, dataset + SLA, index (nguồn, text, `eligible`, snapshot, đích, model)** |
+| **M4** | **`domains/ecommerce/gold/product_catalog.sql`** | **model** | **"Gold-layer product catalog" của GR1 §4.1: nguồn của index** |
+| **M4** | **`platform/spec/retrieval_spec.py`** | **core** | **load + validate `retrieval.yaml`** |
+| **M4** | **`platform/runtime/db.py`** | **core** | **Trino REST (kèm kiểu cột) + psycopg cho job trong stack** |
+| **M4** | **`platform/governance/guard.py`** | **core** | **chốt chặn N3 cho đầu vào embedding** |
+| **M4** | **`platform/freshness/register.py`, `datasets.yaml`** | **core** | **probe + đăng ký dataset vào `platform.datasets`** |
+| **M4** | **`pipelines/embeddings/`** | **pipeline** | **refresh (publish nguyên tử), query, recall; domain-free, được gate kiểm** |
+| **M4** | **`docker/jobs/`** | **image** | **`mosaic/jobs:1`: torch CPU, sentence-transformers, model pin revision** |
+| **M4** | **`tools/embeddings/verify.py`** | **tooling** | **sáu kiểm tra nghiệm thu M4, kết thúc bằng tái hiện L0** |
+| **M4** | **`docs/adr/0006-m4-embedding-pipeline.md`** | **ADR** | **mọi quyết định M4 kèm lý do** |
 
 ---
 
-## 8. Environment facts đã xác lập
+## 9. Environment facts đã xác lập
 
 Bổ sung vào danh sách gotcha của CLAUDE.md. Mỗi dòng đã tốn ít nhất một lần chạy hỏng hoặc gây hiểu
 nhầm.
@@ -657,10 +782,15 @@ nhầm.
 | REST của Trino trả `decimal` dạng chuỗi | cast sang `double` trong SQL |
 | Trino giới hạn 100 partition writer | nâng lên 5000 cho `gold.orders` (D14) |
 | Image Trino lấy heap = 80% bộ nhớ nhìn thấy | pin `-Xmx3G` + `mem_limit` + `MALLOC_ARENA_MAX=2` (mục 6) |
+| Docker Desktop dừng cứng có thể để lại file checkpoint Spark **0 byte** | stream chết với `Incomplete log file`; cất các cặp offset/commit rỗng, chạy lại từ cặp nguyên vẹn gần nhất (D17) |
+| Thư mục `platform/` trùng tên module `platform` của thư viện chuẩn | trong container nó được mount thành `mosaic_platform`; torch/transformers import `platform` |
+| Planner của PostgreSQL không dùng HNSW ở ~1k vector | pin access path cho mỗi đường đi, kiểm bằng `EXPLAIN` (A13) |
+| `_src_ts` ở mọi tầng là `timestamp(6) with time zone` trong Trino | Spark `TIMESTAMP` thành Iceberg `timestamptz`; so sánh thẳng với `from_iso8601_timestamp` |
+| psycopg trả `timestamptz` theo múi giờ session (+07 ở đây) | `.astimezone(utc)` trước khi in hoặc so sánh chuỗi |
 
 ---
 
-## 9. Command reference
+## 10. Command reference
 
 | Lệnh | Milestone | Mục đích |
 |---|---|---|
@@ -680,10 +810,13 @@ nhầm.
 | **`python mosaic.py bronze-verify exactly-once\|replay\|latency`** | **M3** | **các phép chứng minh Bronze và KPI end-to-end** |
 | **`python mosaic.py dbt [-- args]`** | **M3** | **Silver + Gold (assemble rồi dbt)** |
 | **`python -m tools.lakehouse.reconcile`** | **M3** | **Silver == nguồn sống, từng dòng** |
+| **`python mosaic.py embed refresh\|status\|query\|recall [-- args]`** | **M4** | **index của kênh chậm: rebuild, trạng thái, top-k, recall HNSW vs exact** |
+| **`python mosaic.py register [--dry-run]`** | **M4** | **probe + đăng ký dataset vào `platform.datasets`** |
+| **`python mosaic.py embed-verify [--with-refresh]`** | **M4** | **nghiệm thu M4, kết thúc bằng tái hiện L0** |
 
 ---
 
-## 10. Độ phủ KPI của GR1 Table 4.4
+## 11. Độ phủ KPI của GR1 Table 4.4
 
 GR1 định nghĩa năm KPI CDC để đo "khi pipeline được implement ở GR2". Hiện **ba KPI đã đo**, một KPI
 đo một phần, một KPI chưa bắt đầu.
@@ -701,7 +834,7 @@ GR1 định nghĩa năm KPI CDC để đo "khi pipeline được implement ở G
 
 ---
 
-## 11. Những gì CHƯA được kiểm chứng
+## 12. Những gì CHƯA được kiểm chứng
 
 Nêu rõ, theo quy tắc báo cáo của dự án.
 
@@ -712,10 +845,12 @@ Nêu rõ, theo quy tắc báo cáo của dự án.
 - Iceberg maintenance chưa tồn tại; dbt chưa có lịch.
 - Các profile `gov`, `orch`, `console` chưa từng được bật.
 - Mọi thứ vẫn ở quy mô `small` (~86k dòng seed cộng phần tăng từ load generator).
+- M4: planner ở 100k vector có tự chọn HNSW không; lan truyền tag N3; ghi watermark vào
+  `platform.watermarks` (M5); baseline post-filter của E4 (xem 7.9).
 
 ---
 
-## 12. Run ledgers
+## 13. Run ledgers
 
 Máy đọc được, append-only, mỗi dòng một object JSON. Đây là thứ E1–E4 sẽ đọc lại.
 
@@ -726,6 +861,7 @@ Máy đọc được, append-only, mỗi dòng một object JSON. Đây là th�
 | `experiments/results/snapshot_events.jsonl` | `resnapshot` | số `op=r` từng bảng so với số dòng nguồn |
 | `experiments/results/bronze_events.jsonl` | `bronze-verify` | các lần chạy exactly-once, Spark-replay và latency |
 | `experiments/results/lakehouse_events.jsonl` | `tools.lakehouse.reconcile` | số missing / extra / differing từng bảng |
+| `experiments/results/embedding_events.jsonl` | `embed refresh` / `embed recall` / `embed-verify` | mỗi refresh (snapshot đã pin, số dòng, `refreshed_at`, tuổi lúc ra đời, thời gian từng giai đoạn, model revision, kết quả guard, kể cả lần bị từ chối), mỗi lần đo recall, mỗi lần nghiệm thu |
 
 Tính đến 2026-09-08, ledger restart có 5 entry: 3 `restart-safety` (pass, inconclusive, pass) và 2
 `wal-guard` (fail, pass). **Các lần thất bại được giữ có chủ đích.** Cặp fail/pass của `wal-guard`
