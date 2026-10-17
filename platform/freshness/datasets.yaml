@@ -1,0 +1,7 @@
+# Datasets the platform owns itself and every domain shares. Registered with domain = NULL.
+#
+# Bronze is one table for every captured topic (pipelines/bronze), so it belongs to no
+# domain. Its row timestamp is the source commit time carried in the envelope. Its SLA
+# is the commit -> Bronze latency M3 measured (p99 ~13 s with a 10 s trigger) with room.
+datasets:
+  - {id: iceberg.bronze.cdc_events, kind: bronze, row_timestamp_column: _src_ts, freshness_sla_seconds: 60}

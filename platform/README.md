@@ -16,3 +16,9 @@ that arrive at runtime are opaque strings here and are never interpreted.
 | `freshness/` | watermark collectors and the registry API (N1) |
 | `retrieval/` | channel runners and fusion policies (N2) |
 | `governance/` | tag model, propagation along column lineage, embedding-input guard (N3) |
+| `runtime/` | database access for jobs running inside the stack (Trino REST, psycopg) |
+
+Inside the `jobs` container this directory is mounted as the package `mosaic_platform`, never as
+`platform`: that name would shadow the standard-library module torch and transformers import.
+The gate also scans `pipelines/embeddings/`, the index runner, which is generic by the same
+contract (docs/adr/0006-m4-embedding-pipeline.md).
