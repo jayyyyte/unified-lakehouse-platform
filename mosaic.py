@@ -12,6 +12,8 @@ project needs to run. A thin Makefile delegates here for platforms that have it.
     python mosaic.py cdc-verify         check masking/envelope on the Kafka topics
     python mosaic.py loadgen            continuous OLTP write load
     python mosaic.py stockout --top 3   force the L0 failure condition
+    python mosaic.py embed refresh      rebuild the slow channel's vector index (M4)
+    python mosaic.py register           register datasets in platform.datasets (M4)
     python mosaic.py check-abstraction  the L3 domain-purity gate
     python mosaic.py down / clean       stop / stop and destroy volumes
 """
@@ -67,12 +69,22 @@ _DOCKER_CANDIDATES = [
     "/opt/homebrew/bin/docker",
 ]
 
-# Words that must never appear inside platform/. See docs/PROBLEM.md, rung L3.
+# Words that must never appear inside the generic core. See docs/PROBLEM.md, rung L3.
 # Deliberately includes both domains: the core must not know about either.
 DOMAIN_WORDS = [
     "product", "order", "sku", "shopper", "cart", "invento", "payment",
     "posting", "candidate", "recruiter", "salary", "vacancy",
 ]
+
+# What the gate scans. platform/ from M0; pipelines/embeddings/ since M4, because the
+# index runner is generic by decision (ADR 0006, M4-B2) and a decision nothing checks
+# erodes. pipelines/transform/ is not listed: its generated models legitimately carry
+# table names, and assemble.py is what keeps the project domain-free there.
+GATED_DIRS = ["platform", "pipelines/embeddings"]
+
+# SQL's ORDER BY is not domain vocabulary. Without this exemption the word "order"
+# fails every ranking query -- and ranking is what the core exists to do.
+_SQL_KEYWORDS = re.compile(r"\border\s+by\b", re.IGNORECASE)
 
 
 # ------ helpers
@@ -360,34 +372,34 @@ def cmd_connectors(args) -> int:
 
 # ---------- abstraction gate
 def cmd_check_abstraction(args) -> int:
-    """L3 gate: no domain vocabulary may appear anywhere under platform/.
+    """L3 gate: no domain vocabulary may appear anywhere in the generic core.
 
     This is the mechanical form of the claim that MOSAIC is a platform rather than
     an e-commerce pipeline. If it fails, the abstraction has leaked and the leak is
     named precisely. See docs/PROBLEM.md.
     """
-    target = ROOT / "platform"
-    if not target.exists():
-        print("platform/ does not exist yet -- nothing to check.")
-        return 0
-
     pattern = re.compile("|".join(DOMAIN_WORDS), re.IGNORECASE)
     violations: list[str] = []
     scanned = 0
-    for path in sorted(target.rglob("*")):
-        if not path.is_file() or "__pycache__" in path.parts:
+    for d in GATED_DIRS:
+        target = ROOT / d
+        if not target.exists():
             continue
-        try:
-            text = path.read_text(encoding="utf-8")
-        except (UnicodeDecodeError, OSError):
-            continue
-        scanned += 1
-        for n, line in enumerate(text.splitlines(), 1):
-            if pattern.search(line):
-                rel = path.relative_to(ROOT).as_posix()
-                violations.append(f"  {rel}:{n}: {line.strip()[:100]}")
+        for path in sorted(target.rglob("*")):
+            if not path.is_file() or "__pycache__" in path.parts:
+                continue
+            try:
+                text = path.read_text(encoding="utf-8")
+            except (UnicodeDecodeError, OSError):
+                continue
+            scanned += 1
+            for n, line in enumerate(text.splitlines(), 1):
+                if pattern.search(_SQL_KEYWORDS.sub(" ", line)):
+                    rel = path.relative_to(ROOT).as_posix()
+                    violations.append(f"  {rel}:{n}: {line.strip()[:100]}")
 
-    print(f"scanned {scanned} files under platform/ for {len(DOMAIN_WORDS)} domain terms")
+    print(f"scanned {scanned} files under {', '.join(d + '/' for d in GATED_DIRS)} "
+          f"for {len(DOMAIN_WORDS)} domain terms")
     if violations:
         print(f"\nFAIL -- {len(violations)} domain reference(s) leaked into the generic core:\n")
         print("\n".join(violations))
@@ -497,13 +509,25 @@ def cmd_doctor(args) -> int:
             f"{totals.get('written', 0)} rows landed since start, "
             f"backlog {status.get('backlog_records', '?')}")
 
+    # The slow channel's index (M4). Absent is "--", not a failure: it exists only once
+    # someone has run a refresh, exactly like Silver/Gold before the first dbt build.
+    emb = _pg_q("SELECT CASE WHEN to_regclass('public.product_embeddings') IS NULL THEN 'absent' "
+                "ELSE (SELECT count(*)||' rows, refreshed_at '||"
+                "COALESCE(to_char(max(refreshed_at) AT TIME ZONE 'UTC','YYYY-MM-DD HH24:MI:SS'),'-')"
+                "||' UTC, '||COALESCE(round(extract(epoch FROM now()-max(refreshed_at)))::text,'?')"
+                "||'s old' FROM product_embeddings) END")
+    if emb is None or emb == "absent":
+        add("embedding index", None, "not built -- python mosaic.py embed refresh")
+    else:
+        add("embedding index", not emb.startswith("0 "), emb)
+
     # Reuse the real gate rather than reimplementing it.
     import io, contextlib
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf):
         gate = cmd_check_abstraction(None)
     add("abstraction gate", gate == 0,
-        "platform/ is domain-free" if gate == 0 else "LEAKED -- see check-abstraction")
+        "generic core is domain-free" if gate == 0 else "LEAKED -- see check-abstraction")
 
     return _render(checks)
 
@@ -686,6 +710,33 @@ def cmd_dbt(args) -> int:
     return compose("run", "--rm", "dbt", *dbt_args, profiles=["transform"])
 
 
+def jobs(*args: str) -> int:
+    """Run one platform job (`python -m <module> ...`) in the jobs image (M4)."""
+    return compose("run", "--rm", "-T", "jobs", *args, profiles=["jobs"])
+
+
+def cmd_embed(args) -> int:
+    """The slow channel's index: refresh | status | query | recall (ADR 0006)."""
+    extra = [a for a in (args.extra or []) if a != "--"]
+    if "--domain" not in extra:
+        extra = ["--domain", args.domain, *extra]
+    return jobs("embeddings", args.action, *extra)
+
+
+def cmd_register(args) -> int:
+    """Probe and register a domain's datasets in platform.datasets (the N1 hand-off)."""
+    return jobs("mosaic_platform.freshness.register", "--domain", args.domain,
+                *(["--dry-run"] if args.dry_run else []))
+
+
+def cmd_embed_verify(args) -> int:
+    """M4's acceptance checks, ending in the first end-to-end reproduction of L0."""
+    argv = ["--domain", args.domain]
+    if args.with_refresh:
+        argv.append("--with-refresh")
+    return _tool("tools.embeddings.verify", *argv)
+
+
 def cmd_bronze_verify(args) -> int:
     """Exactly-once landing (Connect- and Spark-side replay) and end-to-end latency."""
     argv = [args.check, "--domain", args.domain]
@@ -822,6 +873,27 @@ def main() -> int:
     bv.add_argument("--rate", type=float, default=20.0)
     bv.add_argument("--duration", type=int, default=120)
     bv.set_defaults(func=cmd_bronze_verify)
+
+    em = sub.add_parser("embed",
+                        help="slow-channel index: refresh | status | query | recall; "
+                             "extra args go to the job, e.g. embed query -- --text 'tent'")
+    em.add_argument("action", choices=["refresh", "status", "query", "recall"])
+    em.add_argument("--domain", default="ecommerce")
+    em.add_argument("extra", nargs=argparse.REMAINDER)
+    em.set_defaults(func=cmd_embed)
+
+    rg = sub.add_parser("register",
+                        help="probe + register a domain's datasets in platform.datasets")
+    rg.add_argument("--domain", default="ecommerce")
+    rg.add_argument("--dry-run", action="store_true")
+    rg.set_defaults(func=cmd_register)
+
+    ev = sub.add_parser("embed-verify",
+                        help="M4 acceptance: counts, semantics, recall, guard, L0 stale hit")
+    ev.add_argument("--domain", default="ecommerce")
+    ev.add_argument("--with-refresh", action="store_true",
+                    help="also rebuild Gold + the index and show the stale hit disappear")
+    ev.set_defaults(func=cmd_embed_verify)
 
     sub.add_parser("sql", help="Trino CLI").set_defaults(func=cmd_sql)
     ps = sub.add_parser("psql", help="PostgreSQL shell")

@@ -292,6 +292,34 @@ services:
       - ../domains:/opt/mosaic/domains:ro          # connectors -> Silver; gold/ -> Gold
     networks: [mosaic]
 
+  # Platform jobs (M4): the embedding-index pipeline and dataset registration. One-shot,
+  # like dbt -- `python mosaic.py embed ...` / `register` run it, `up` never waits on it.
+  # There is deliberately no scheduler: the index's refresh cadence is the slow
+  # channel's staleness, an experimental variable (docs/adr/0006, M4-C1).
+  #
+  # platform/ is mounted as mosaic_platform, not platform: a package named `platform`
+  # would shadow the standard library module that torch and transformers import.
+  jobs:
+    build:
+      context: ./jobs
+    image: mosaic/jobs:1
+    container_name: mosaic-jobs
+    profiles: [jobs]
+    depends_on:
+      trino: {condition: service_healthy}
+      postgres: {condition: service_healthy}
+    environment:
+      <<: *common-env
+      MOSAIC_TRINO_HOST: trino
+      MOSAIC_TRINO_PORT: "8080"
+      MOSAIC_PG_HOST: postgres
+    volumes:
+      - ../platform:/opt/mosaic/lib/mosaic_platform:ro
+      - ../pipelines/embeddings:/opt/mosaic/lib/embeddings:ro
+      - ../domains:/opt/mosaic/domains:ro
+      - ../experiments/results:/opt/mosaic/results     # run ledgers (append-only)
+    networks: [mosaic]
+
   # ------------------------------------------------------------------ SERVING
   trino:
     image: trinodb/trino:451
