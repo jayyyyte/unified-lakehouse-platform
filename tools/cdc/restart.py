@@ -524,7 +524,20 @@ def cmd_restart(a: argparse.Namespace) -> int:
     print(f"        polling drain + committed offset "
           f"(flush interval {a.flush_interval_ms // 1000}s)")
     t_last_change = time.perf_counter()
-    previous = total_offsets(end_offsets_many(drain_topics))
+    snapshot = end_offsets_many(drain_topics)
+    previous = total_offsets(snapshot)
+    # The same quiescence, attributed per connector (E1 / GR1 Table 4.4 compares the
+    # two mechanisms, so "catch-up time" has to be a number for each of them, not one
+    # for the worker). A connector is caught up when its own topics stop advancing.
+    topics_of = {n: [c.topic for c in captured
+                     if c.connector == n and c.relation != heartbeat_relation]
+                 for n in names}
+
+    def per_connector(snap: dict) -> dict[str, int]:
+        return {n: sum(sum(snap.get(t, {}).values()) for t in topics_of[n]) for n in names}
+
+    previous_by = per_connector(snapshot)
+    t_last_by = {n: t_last_change for n in names}
     flat = 0
     offsets_after = dict(offsets_at_kill)
     offset_at = {}
@@ -534,13 +547,19 @@ def cmd_restart(a: argparse.Namespace) -> int:
         if flat >= FLAT_SAMPLES and not pending:
             break
         time.sleep(POLL_SECONDS)
-        current = total_offsets(end_offsets_many(drain_topics))
+        snapshot = end_offsets_many(drain_topics)
+        current = total_offsets(snapshot)
         if current != previous:
             t_last_change = time.perf_counter()
             previous = current
             flat = 0
         else:
             flat += 1
+        current_by = per_connector(snapshot)
+        for n in names:
+            if current_by[n] != previous_by[n]:
+                previous_by[n] = current_by[n]
+                t_last_by[n] = time.perf_counter()
         for n in pending:
             latest = stored_offset(n)
             if _offset_progressed(offsets_at_kill.get(n), latest):
@@ -548,6 +567,9 @@ def cmd_restart(a: argparse.Namespace) -> int:
                 offset_at[n] = time.perf_counter()
     drained = flat >= FLAT_SAMPLES
     recovery_seconds = t_last_change - t_restart
+    recovery_by_connector = {n: round(t_last_by[n] - t_restart, 2) for n in names}
+    for n in names:
+        print(f"        {n:<22} topics went flat {recovery_by_connector[n]:.1f}s after restart")
     offset_ok = len(offset_at) == len(names)
     offset_seconds = (max(offset_at.values()) - t_restart) if offset_ok else -1.0
 
@@ -595,6 +617,7 @@ def cmd_restart(a: argparse.Namespace) -> int:
         "connectors_running_after_s": round(t_running, 2),
         "connectors_returned": running,
         "recovery_seconds": round(recovery_seconds, 2), "drained": drained,
+        "recovery_by_connector": recovery_by_connector,
         "writes_continued_s": round(t_load_stop - t_restart, 2),
         "drain_after_last_write_s": round(t_last_change - t_load_stop, 2),
         "offset_flush_seconds": round(offset_seconds, 2), "offset_advanced": offset_ok,
