@@ -747,6 +747,14 @@ def cmd_bronze_verify(args) -> int:
     return _tool("tools.bronze.verify", *argv)
 
 
+def cmd_e1(args) -> int:
+    """E1: GR1 Table 4.4's five CDC KPIs, measured on both sources (M7)."""
+    argv = ["--phase", args.phase, "--domain", args.domain]
+    if args.seed is not None:
+        argv += ["--seed", str(args.seed)]
+    return _tool("experiments.e1_cdc", *argv)
+
+
 # ------------------------------------------------------------------- shells
 def cmd_sql(args) -> int:
     return compose("exec", "trino", "trino")
@@ -894,6 +902,15 @@ def main() -> int:
     ev.add_argument("--with-refresh", action="store_true",
                     help="also rebuild Gold + the index and show the stale hit disappear")
     ev.set_defaults(func=cmd_embed_verify)
+
+    e1 = sub.add_parser("e1",
+                        help="experiment E1: CDC comparison, GR1 Table 4.4 (latency, "
+                             "throughput, restart, ddl, wal, report)")
+    e1.add_argument("--phase", default="all",
+                    choices=["all", "latency", "throughput", "restart", "ddl", "wal", "report"])
+    e1.add_argument("--domain", default="ecommerce")
+    e1.add_argument("--seed", type=int, default=None)
+    e1.set_defaults(func=cmd_e1)
 
     sub.add_parser("sql", help="Trino CLI").set_defaults(func=cmd_sql)
     ps = sub.add_parser("psql", help="PostgreSQL shell")
