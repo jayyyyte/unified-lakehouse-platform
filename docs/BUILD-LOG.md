@@ -720,6 +720,25 @@ Trên 100 vector truy vấn lấy mẫu từ index, k = 10, sau khi pin access p
 - Watermark chưa được ghi vào `platform.watermarks` (việc của collector M5); `register` chỉ in bản xem trước.
 - Baseline post-filter của E4 (M4-A2) mới là cam kết, chưa có code.
 
+### 7.10 Sau M4: bring-up mất Kafka (2026-11-10)
+
+Bring-up sau 25 ngày dừng. `doctor`: Spark exited, không có connector nào. Bronze chết với
+`UnknownTopicOrPartitionException`: topic **không tồn tại**, khác với topic rỗng do retention (A10).
+Nguyên nhân là volume Kafka của Appendix B chưa bao giờ được ghi (**A14**, finding 22).
+
+| Bước | Kết quả |
+|---|---|
+| Sửa `KAFKA_LOG_DIRS`, tạo lại broker | dữ liệu ghi vào volume; `/tmp/kafka-logs` không còn |
+| Phép thử bền vững | topic probe 3 message, force-recreate (ID container đổi): offset 3, đọc lại đủ 3 |
+| Topic nội bộ bị auto-create sai (`delete`, 1 partition) | Connect từ chối chạy; dừng Connect + Schema Registry, xoá 4 topic rỗng, bật lại: `compact`, 25/5/1/1 partition |
+| `connectors` (snapshot ban đầu) | số message = số dòng nguồn ở cả 7 bảng |
+| Checkpoint Bronze → `bronze.kafka-lost-2026-11-10`, bật Spark | +150,673 dòng trong 4 batch, khớp snapshot từng bảng, backlog 0 |
+| `doctor` | pass mọi check |
+| loadgen 60 s + `cdc-verify --require-update` | 600 ops, đếm khớp; 430 UPDATE, đủ 430 before image đã mask |
+| `dbt` + `reconcile` | 84/84; 0 missing / 0 extra / 0 differing, 7 bảng |
+
+Chưa làm: refresh lại embedding index (vẫn ở `refreshed_at` 2026-10-16).
+
 ---
 
 ## 8. Deliverables: bản đồ file theo milestone

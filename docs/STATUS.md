@@ -1,6 +1,6 @@
 # Implementation status (Trạng thái implement)
 
-**Last updated:** 2026-10-16 | **Current milestone:** M4 **done, verified** → M5 next | **Next action:** M5: collector của N1 Freshness Registry (ghi `platform.watermarks`), giải bài toán nguồn nhàn rỗi bằng heartbeat CDC
+**Last updated:** 2026-11-10 | **Current milestone:** M4 **done, verified** → M5 next | **Next action:** M5: chốt câu hỏi nguồn nhàn rỗi (finding 20), rồi viết collector của N1 Freshness Registry (ghi `platform.watermarks`)
 
 Cách nhanh nhất để xem trạng thái thật của hệ thống: `python mosaic.py doctor`.
 
@@ -99,22 +99,26 @@ gồm cả check mới `bronze stream`.
 
 ## Current runtime state (trạng thái đang chạy)
 
-Stack đang **up**, profile mặc định, 10/10 healthy, Bronze stream active với backlog 0; `doctor` pass
-mọi check, gồm dòng mới `embedding index`. Silver và Gold được build lần cuối (toàn bộ, 84/84) lúc
-2026-10-16 16:47 UTC. Index: 946 dòng, `refreshed_at` 2026-10-16 16:46:34 UTC. Không có gì tự động
-refresh cả ba. `platform.datasets` có 14 dòng; `platform.watermarks` vẫn rỗng (M5).
+Stack đang **up** (bring-up 2026-11-10 sau 25 ngày dừng), profile mặc định, 10/10 healthy, Bronze
+stream active với backlog 0; `doctor` pass mọi check. Lần bring-up này mất toàn bộ Kafka (finding 22,
+A14); đã sửa và khôi phục, kiểm chứng tới `reconcile`. Silver và Gold được build lần cuối (84/84) lúc
+2026-11-10 03:38 UTC. **Index chưa refresh lại**: vẫn 946 dòng, `refreshed_at` 2026-10-16 16:46:34 UTC,
+nên giờ nó cũ hơn Gold (loadgen 60 s đã đổi giá, tồn kho, tạo đơn mới). Không có gì tự động refresh cả
+ba. `platform.datasets` có 14 dòng; `platform.watermarks` vẫn rỗng (M5).
 
-Lần stockout/restock của `embed-verify` (sản phẩm 342) là thay đổi nguồn duy nhất kể từ 2026-10-05; sản
-phẩm đó đã được trả về tồn kho 160, và Gold + index đã được build lại sau đó nên cả ba nhất quán.
+Số dòng hiện tại (seed corpus + phần tăng thêm do load generator): orders 37,037, order_items 70,697,
+payments 30,056, users 6,511, products 1,000, categories 48, inventory 1,000.
 
-Số dòng hiện tại (seed corpus + phần tăng thêm do load generator): orders 36,678, order_items 70,056,
-payments 29,827, users 6,479, products 1,000, categories 48, inventory 1,000.
+Bronze có 318k+ dòng: ba lớp `op=r` cho mỗi key (seed snapshot, resnapshot 2026-10-05, snapshot ban
+đầu 2026-11-10) cùng lịch sử streaming. Vô hại vì Silver sắp theo vị trí nguồn; `reconcile` đã xác nhận.
 
 Checkpoint của Bronze đã được **cất sang chỗ khác, không xoá**, ngày 2026-10-05:
 `spark-state:/opt/mosaic/state/checkpoints/bronze.stale-2026-09-23`. Lý do: offset trong checkpoint
 trỏ vào dữ liệu đã bị Kafka retention xoá, và bảng tương ứng thì rỗng. Có thể xoá khi không còn ai
 cần. Ngày 2026-10-16 thêm `checkpoints/bronze.torn-2026-10-16/`: bốn file offset/commit **0 byte** của
-batch 1890–1891, bị rách khi Docker Desktop dừng cứng (finding 19).
+batch 1890–1891, bị rách khi Docker Desktop dừng cứng (finding 19). Ngày 2026-11-10 thêm
+`checkpoints/bronze.kafka-lost-2026-11-10/` (batch cuối 2330): offset của các topic đã mất cùng Kafka
+(finding 22), không còn dùng được.
 
 `mosaic_pub` publish 5 bảng: 4 bảng domain + `cdc_heartbeat` (finding 10).
 
@@ -192,6 +196,11 @@ batch 1890–1891, bị rách khi Docker Desktop dừng cứng (finding 19).
 21. **Kênh chậm phải "sai", không chỉ "già"** (M4, thiết kế, ADR 0006 M4-A1). Embedding chỉ mã hoá mô tả, mà
     mô tả không bao giờ đổi (C9). Index cũ chỉ *sai* nếu nó chụp lại tập thực thể đủ điều kiện cùng các fact
     nhanh lúc refresh. Đây là điều kiện để E4 đo được một hiệu ứng có thật.
+22. **Volume Kafka của GR1 Appendix B không bao giờ được ghi** (A14, 2026-11-10). `apache/kafka` ghi vào
+    `/tmp/kafka-logs`; volume mount vào `/var/lib/kafka/data` là đường dẫn của image Confluent. Dữ liệu
+    sống trong lớp ghi của container: qua được restart, nhưng **mất ở mỗi lần tạo lại container**, kể cả
+    `mosaic.py down`. Đã sửa (`KAFKA_LOG_DIRS`), chứng minh bằng force-recreate (topic probe còn nguyên),
+    khôi phục bằng snapshot ban đầu của connector; Silver vẫn khớp nguồn từng dòng.
 
 ## Open questions (câu hỏi còn mở)
 
@@ -200,7 +209,8 @@ batch 1890–1891, bị rách khi Docker Desktop dừng cứng (finding 19).
   tháng? Nên chốt trong thí nghiệm E2 ở quy mô `full`. **Đây là quyết định của bạn.**
 - **Kafka retention (A10).** Giữ mặc định 7 ngày (vì Bronze mới là system of record), hay đặt
   `retention.ms=-1` cho các topic CDC để một lần tắt máy lâu không thể xoá lịch sử chưa được tiêu
-  thụ?
+  thụ? *(2026-11-10: trước bản sửa A14, câu hỏi này còn chưa có ý nghĩa, vì Kafka không bền qua
+  một lần tạo lại container. Giờ nó mới thật sự là câu hỏi.)*
 - **Quy mô.** Mọi thứ vẫn ở mức `small` (~36k orders). GR1 §10.1 muốn 10M+ dòng cho E2. Ước tính
   nạp `full` mất khoảng 40 phút; giờ hình dạng pipeline đã cố định nên đáng làm trước M7.
 - **Phân vùng Silver (D12).** Silver hiện là các bảng trạng thái hiện tại, không phân vùng; chỉ xem

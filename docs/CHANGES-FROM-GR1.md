@@ -56,6 +56,7 @@ qua được là một số **cấu hình cụ thể** trong Appendix B và C, v
 | A11 | **MySQL `DATETIME` đến lệch 7 tiếng**: Debezium mã hoá giờ địa phương không có múi giờ như thể là UTC; việc chuẩn hoá mà §4.4 giao cho SMT `TimestampConverter` phải chuyển sang Silver | Finding | (xem A1) |
 | A12 | **Partitioning `gold.orders` của §4.3 quá mịn cho prototype**: 2,944 phân vùng, trung bình 12.6 dòng; build vượt giới hạn writer mặc định của Trino; `ANALYZE` chậm 33 lần và full scan chậm 14 lần so với cùng dữ liệu không phân vùng | Finding | — |
 | A13 | **Ở quy mô prototype, planner của PostgreSQL bỏ qua index HNSW**: một query "ANN" không pin access path thực chất là tìm chính xác, nên phép so sánh HNSW vs exact của §4.5 (Track 2) cho kết quả vô nghĩa nếu không pin từng đường đi | Finding | [0006](adr/0006-m4-embedding-pipeline.md) |
+| A14 | **Volume Kafka của Appendix B không bao giờ được ghi**: `apache/kafka` ghi vào `/tmp/kafka-logs`, còn volume mount vào `/var/lib/kafka/data` (đường dẫn của image Confluent). Mỗi lần tạo lại container là mất toàn bộ topic, cấu hình connector và source offset | Finding | — |
 | B1 | Apache Ranger → Open Policy Agent | Substitution | [0001](adr/0001-opa-instead-of-ranger.md) |
 | B2 | DataHub → OpenLineage + Marquez | Substitution | [0002](adr/0002-marquez-instead-of-datahub.md) |
 | B3 | Spark (Silver/Gold) + Great Expectations → dbt-trino | Substitution | [0003](adr/0003-dbt-trino-for-silver-gold.md) |
@@ -843,6 +844,71 @@ kiểm plan**. Nên ghi điều này thành một dòng trong phần phương ph
 
 **Fixed and verified** (M4, 2026-10-16). Ledger: `experiments/results/embedding_events.jsonl`, event
 `recall`, trường `plans_ok`.
+
+---
+
+## A14. Appendix B's Kafka volume is never written
+
+*(Volume Kafka của Appendix B không bao giờ được ghi)*
+
+**Phát hiện ngày 2026-11-10, khi bring-up sau 25 ngày dừng máy.** Cùng họ với A9: cấu hình *trông*
+như có tác dụng, chạy không báo lỗi, nhưng không làm điều nó được viết ra để làm.
+
+### What GR1 says
+
+> **Appendix B** — `image: apache/kafka:3.7.0` cùng `volumes: - kafka-data:/var/lib/kafka/data`.
+> **Table 4.1** — Kafka là *"durable streaming buffer that provides replay"*.
+
+### What actually happens
+
+`/var/lib/kafka/data` là `log.dirs` mặc định của image **Confluent** (`cp-kafka`). Image **Apache**
+khi được cấu hình qua biến môi trường `KAFKA_*` thì dùng `log.dirs` mặc định của Kafka là
+`/tmp/kafka-logs`, và Appendix B không đặt `KAFKA_LOG_DIRS`. Volume vì vậy được mount nhưng không bao
+giờ được ghi: thư mục trong volume vẫn mang ngày của image (Feb 2024) và rỗng.
+
+Dữ liệu Kafka sống trong **lớp ghi của container**. Nó qua được `stop`/`start` và restart Docker
+Desktop, nên lỗi ẩn suốt M1–M4. Nhưng nó mất ở **mỗi lần container bị tạo lại**: `docker compose
+down`, tức là `python mosaic.py down`, lệnh mà help text mô tả là *"stop the stack, keep data"*;
+hoặc một lần `up` thấy cấu hình đã đổi.
+
+| Thời điểm | Quan sát |
+|---|---|
+| 2026-11-10, sau khi container được tạo lại | chỉ còn `__consumer_offsets`, `_connect_*`, `_schemas`; **mọi topic CDC biến mất** (`UnknownTopicOrPartitionException` trong Bronze, chứ không phải `OffsetOutOfRange` như A10); `_connect_offsets` rỗng; không còn connector nào |
+| cùng ngày, trong container | `/tmp/kafka-logs` 1.1 MB (broker thật sự ghi ở đây); `/var/lib/kafka/data` rỗng |
+
+Tác dụng phụ trong lúc sửa: khi broker bị tạo lại trong lúc Connect và Schema Registry vẫn chạy, các
+client của chúng tự tạo lại topic nội bộ qua `auto.create.topics.enable` của broker, với 1 partition
+và `cleanup.policy=delete`. Connect từ chối khởi động (*"required to have 'cleanup.policy=compact'"*),
+và từ chối là đúng. Cách xử lý: dừng hai dịch vụ, xoá bốn topic (khi đó đều rỗng), rồi bật lại để
+chúng tự tạo topic với `compact` (`_connect_offsets` 25 partition, `_connect_status` 5).
+
+### What we do instead
+
+- `KAFKA_LOG_DIRS: /var/lib/kafka/data` trong `docker/compose.yaml`.
+- **Phép thử bền vững:** tạo topic probe có 3 message, `up -d --force-recreate kafka` (container ID
+  `c3daff2e1fd4` → `7396559a61df`), offset vẫn là 3 và đọc lại được cả 3 message. Negative control là
+  chính sự cố: cùng thao tác tạo lại container, trước bản sửa, đã xoá mọi topic.
+- **Khôi phục mà không mất gì ở nguồn:** binlog MySQL và replication slot PostgreSQL nằm trong volume
+  riêng (slot chỉ trễ 3,104 byte). Đăng ký lại connector, và vì `_connect_offsets` rỗng nên
+  `snapshot.mode=initial` tự snapshot lại: số message mỗi topic **bằng đúng** số dòng nguồn ở cả 7
+  bảng. Cất checkpoint Bronze sang `bronze.kafka-lost-2026-11-10`; Bronze nạp thêm đúng số đó mỗi bảng
+  (167,542 → 318,216 dòng, 0 bị coi là trùng, vì `op=r` mới mang vị trí nguồn mới).
+- **End-to-end:** loadgen 60 s rồi `cdc-verify --require-update` (430 UPDATE, đủ 430 before image đã
+  mask), `dbt build` 84/84, `reconcile` 0 missing / 0 extra / 0 differing ở cả 7 bảng. Silver giờ chứa
+  ba lớp `op=r` chồng lên nhau cho mỗi key, và latest-wins theo vị trí nguồn (finding 17) hấp thụ
+  được.
+
+### Impact on GR1's claims
+
+Tính "durable" của Kafka trong Table 4.1 chưa bao giờ đúng với cấu hình Appendix B: replay bị giới
+hạn bởi retention (A10) **và** bởi vòng đời của container. Lại thêm một lý do để coi Bronze là system
+of record. Nên sửa Appendix B (thêm `KAFKA_LOG_DIRS`), hoặc ghi chú rằng đường dẫn mount chỉ đúng với
+image Confluent.
+
+### Status
+
+**Fixed and verified** (2026-11-10). Ledger: `experiments/results/lakehouse_events.jsonl` (lần
+reconcile sau khôi phục).
 
 ---
 
