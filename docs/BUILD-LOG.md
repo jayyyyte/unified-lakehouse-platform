@@ -86,7 +86,7 @@ trích từ output thật, không bao giờ trích từ kỳ vọng.
 | **M4** | Trino federation + embedding pipeline | **done, verified** | **2026-10-16** | `embed-verify --with-refresh` 7/7 PASS: counts, semantics, recall (plan đã kiểm), guard, no drift, **L0 stale hit**, L0 fixed; `register` 14 dataset |
 | M5 | N1 Freshness Registry | có schema, chưa có collector | — | — |
 | M6 | N2 Retrieval + fusion engine | chưa bắt đầu | — | — |
-| M7 | Experiments E1–E4 | chưa bắt đầu | — | — |
+| M7 | Experiments E1–E4 | **E1 done, verified**; E2–E4 chưa bắt đầu | E1: **2026-11-17** | `e1` 6 phase pass trên cả hai nguồn; `e1_cdc_report.md`; lần DDL đầu fail → A15 |
 | M8 | N3 governance, `jobmarket` domain, console | chưa bắt đầu | — | — |
 
 ---
@@ -739,6 +739,28 @@ Nguyên nhân là volume Kafka của Appendix B chưa bao giờ được ghi (**
 
 Chưa làm: refresh lại embedding index (vẫn ở `refreshed_at` 2026-10-16).
 
+### 7.11 M7 bắt đầu sớm: E1, so sánh CDC (2026-11-17)
+
+E1 kéo lên trước M5 vì không phụ thuộc Registry hay fusion. Quyết định trước khi viết code: quy mô `small`,
+bậc thang throughput 25/50/100, thử DDL bằng ADD/UPDATE/DROP rồi hoàn nguyên ([ADR 0007](adr/0007-e1-cdc-comparison.md)).
+Runner `experiments/e1_cdc.py` gọi lại các công cụ M2–M3 thay vì chép logic; `restart.py` được sửa để tách
+thời gian đuổi kịp theo từng connector.
+
+| Phase | Kết quả |
+|---|---|
+| latency, 20 ops/s × 120 s | p50 7.38 / 7.96 s, p99 14.44 / 14.54 s (MySQL / PostgreSQL); khớp M3 |
+| throughput 25 / 50 / 100 | sustained 25.0 / 29.7 / 41.0 ops/s; p95 Bronze 11.9–13.1 s ở mọi bậc |
+| restart, SIGKILL 45 s | 0 gap, 193 replay; RUNNING sau 20.1 s; phẳng 42.1 s sau restart, 1.97 s sau lần ghi cuối |
+| ddl, lần 1 | Kafka + Bronze ổn; `dbt build` Silver **ERROR** `Column 't.e1_ddl_probe' cannot be resolved` → A15 |
+| ddl, lần 2 (sau sửa macro) | cột mới trên Kafka sau 3.72 s cả hai nguồn; Bronze 1.0 / 1.4 s; Silver đúng giá trị; DROP tự lan; số dòng Silver = nguồn |
+| wal | idle + worker sống: flush tiến 55,568 B; worker chết: 0 B; pass |
+| report | `experiments/results/e1_cdc_report.md` |
+| sau E1: `dbt` đầy đủ + `reconcile` | 84/84 với macro đã sửa; 0 missing / 0 extra / 0 differing ở cả 7 bảng |
+
+Hai lỗi harness trong lúc làm, đều ở runner chứ không ở hệ thống: query Bronze dùng cột `after` không tồn tại
+(Bronze giữ cả record trong `envelope`), và lần chạy DDL bị hỏng đó đã để lại cột probe ở nguồn; lần chạy kế
+tiếp tự phát hiện và DROP trước khi đo.
+
 ---
 
 ## 8. Deliverables: bản đồ file theo milestone
@@ -837,15 +859,15 @@ nhầm.
 
 ## 11. Độ phủ KPI của GR1 Table 4.4
 
-GR1 định nghĩa năm KPI CDC để đo "khi pipeline được implement ở GR2". Hiện **ba KPI đã đo**, một KPI
-đo một phần, một KPI chưa bắt đầu.
+GR1 định nghĩa năm KPI CDC để đo "khi pipeline được implement ở GR2". **Từ E1 (2026-11-17), cả năm KPI đã
+đo trên cả hai nguồn trong cùng một phiên.** Bảng đầy đủ: `experiments/results/e1_cdc_report.md`.
 
 | KPI | Trạng thái | Giá trị / vướng mắc |
 |---|---|---|
-| **End-to-end latency (commit nguồn → Iceberg Bronze)** | **đã đo (M3)** | p50 **7.8 s** MySQL / **8.0 s** PostgreSQL, p99 12.3 / 12.9 s; capture p50 0.26 / 0.49 s, phần còn lại là trigger 10 s |
-| Throughput dưới tải liên tục | một phần (M1) | ~100 ops/s sustained, bị giới hạn bởi fsync mỗi commit dưới Docker Desktop |
-| **Restart recovery time** | **đã đo (M2)** | **30.3 s** để đuổi kịp hoàn toàn sau SIGKILL 45 s, với việc ghi vẫn tiếp tục 28.4 s trong lúc hồi phục |
-| DDL handling (ảnh hưởng của `ALTER TABLE` ở downstream) | chưa bắt đầu | giới hạn đã ghi ở ADR 0005 (`schemas.enable=false` không thấy được thay đổi kiểu thuần tuý) |
+| **End-to-end latency (commit nguồn → Iceberg Bronze)** | **đã đo (M3, đo lại E1: p50 7.38 / 7.96 s)** | p50 **7.8 s** MySQL / **8.0 s** PostgreSQL, p99 12.3 / 12.9 s; capture p50 0.26 / 0.49 s, phần còn lại là trigger 10 s |
+| **Throughput dưới tải liên tục** | **đã đo (E1)** | bậc thang 25/50/100 ops/s → sustained 25.0 / 29.7 / 41.0; Kafka 88.5 ev/s MySQL, 48.4 ev/s PostgreSQL ở bậc cao nhất; p95 không đổi, nên nút cổ chai là nguồn |
+| **Restart recovery time** | **đã đo (M2, đo lại E1 theo từng connector: 42.1 s, 1.97 s sau lần ghi cuối)** | **30.3 s** để đuổi kịp hoàn toàn sau SIGKILL 45 s, với việc ghi vẫn tiếp tục 28.4 s trong lúc hồi phục |
+| **DDL handling (ảnh hưởng của `ALTER TABLE` ở downstream)** | **đã đo (E1)** | ADD/DROP COLUMN: cả hai connector qua được, Kafka 3.7 s; tầng hỏng là Silver (A15, đã sửa). Đổi *kiểu* cột vẫn chưa đo (ADR 0005) |
 | **WAL lag (chỉ PostgreSQL)** | **đã đo (M2)** | tái hiện được flush đứng yên + WAL phình theo yêu cầu; guard đã sửa và đo lại (0 → 688,776 byte) |
 
 *(Bản gốc ghi "Two are now measured" nhưng bảng liệt kê ba KPI đã đo; ADVISOR-BRIEFING cũng nói
@@ -880,6 +902,7 @@ Máy đọc được, append-only, mỗi dòng một object JSON. Đây là th�
 | `experiments/results/snapshot_events.jsonl` | `resnapshot` | số `op=r` từng bảng so với số dòng nguồn |
 | `experiments/results/bronze_events.jsonl` | `bronze-verify` | các lần chạy exactly-once, Spark-replay và latency |
 | `experiments/results/lakehouse_events.jsonl` | `tools.lakehouse.reconcile` | số missing / extra / differing từng bảng |
+| `experiments/results/e1_cdc_events.jsonl` | `e1` | một entry mỗi phase của E1, kể cả lần DDL fail; `--phase report` đọc entry mới nhất của mỗi phase |
 | `experiments/results/embedding_events.jsonl` | `embed refresh` / `embed recall` / `embed-verify` | mỗi refresh (snapshot đã pin, số dòng, `refreshed_at`, tuổi lúc ra đời, thời gian từng giai đoạn, model revision, kết quả guard, kể cả lần bị từ chối), mỗi lần đo recall, mỗi lần nghiệm thu |
 
 Tính đến 2026-09-08, ledger restart có 5 entry: 3 `restart-safety` (pass, inconclusive, pass) và 2

@@ -57,6 +57,7 @@ qua được là một số **cấu hình cụ thể** trong Appendix B và C, v
 | A12 | **Partitioning `gold.orders` của §4.3 quá mịn cho prototype**: 2,944 phân vùng, trung bình 12.6 dòng; build vượt giới hạn writer mặc định của Trino; `ANALYZE` chậm 33 lần và full scan chậm 14 lần so với cùng dữ liệu không phân vùng | Finding | — |
 | A13 | **Ở quy mô prototype, planner của PostgreSQL bỏ qua index HNSW**: một query "ANN" không pin access path thực chất là tìm chính xác, nên phép so sánh HNSW vs exact của §4.5 (Track 2) cho kết quả vô nghĩa nếu không pin từng đường đi | Finding | [0006](adr/0006-m4-embedding-pipeline.md) |
 | A14 | **Volume Kafka của Appendix B không bao giờ được ghi**: `apache/kafka` ghi vào `/tmp/kafka-logs`, còn volume mount vào `/var/lib/kafka/data` (đường dẫn của image Confluent). Mỗi lần tạo lại container là mất toàn bộ topic, cấu hình connector và source offset | Finding | — |
+| A15 | **DDL ở nguồn không làm hỏng tầng CDC mà làm hỏng tầng transform**: cả hai connector stream qua `ADD COLUMN` trong < 5 s, nhưng build incremental của Silver vỡ vì dbt build bảng tạm *trước* khi áp `on_schema_change`; `ALTER TABLE` ở nguồn làm Silver ngừng cập nhật tới khi `--full-refresh`. Đo bởi E1, đã sửa | Finding | [0007](adr/0007-e1-cdc-comparison.md) |
 | B1 | Apache Ranger → Open Policy Agent | Substitution | [0001](adr/0001-opa-instead-of-ranger.md) |
 | B2 | DataHub → OpenLineage + Marquez | Substitution | [0002](adr/0002-marquez-instead-of-datahub.md) |
 | B3 | Spark (Silver/Gold) + Great Expectations → dbt-trino | Substitution | [0003](adr/0003-dbt-trino-for-silver-gold.md) |
@@ -909,6 +910,57 @@ image Confluent.
 
 **Fixed and verified** (2026-11-10). Ledger: `experiments/results/lakehouse_events.jsonl` (lần
 reconcile sau khôi phục).
+
+## A15. Source DDL breaks the transform tier, not the CDC tier
+
+*(DDL ở nguồn không làm hỏng tầng CDC mà làm hỏng tầng transform)*
+
+**Phát hiện ngày 2026-11-17, bởi thí nghiệm E1** (KPI "DDL handling" của Table 4.4, lần đầu được thử).
+
+### What GR1 says
+
+> **Table 4.3** — DDL capture: MySQL *"well supported through a schema-history topic"*; PostgreSQL
+> *"more limited under the pgoutput plugin"*. **Table 4.4** — KPI: *"downstream impact of an `ALTER
+> TABLE` statement issued at the source"*.
+
+Cách đặt KPI ngầm giả định rằng nếu DDL gây hại thì hại nằm ở tầng capture, và PostgreSQL là bên yếu hơn.
+
+### What actually happens
+
+Giao thức (ADR 0007, E1-B4): dưới tải 20 ops/s, `ALTER TABLE ... ADD COLUMN e1_ddl_probe VARCHAR(32)`
+trên `ecommerce_tx.orders` (MySQL) và `public.users` (PostgreSQL), rồi UPDATE một dòng qua cột đó và
+theo dấu nó xuống từng tầng.
+
+| Tầng | MySQL (binlog) | PostgreSQL (pgoutput) |
+|---|---|---|
+| Connector | RUNNING suốt; event mang cột mới trên Kafka sau 3.7–4.7 s; `_schema_history` +1, topic schema-change `mosaic.mysql` +1 (chứa câu DDL) | RUNNING suốt; event mang cột mới sau 3.7–5.1 s; không có topic DDL nào, cột xuất hiện thẳng trong after-image |
+| Bronze | dòng probe sau ~1 s, stream active | như MySQL |
+| Silver, **trước sửa** | `dbt build` incremental **ERROR** `Column 't.e1_ddl_probe' cannot be resolved` | **ERROR** y hệt |
+| Silver, sau sửa | cột có mặt, giá trị probe đúng; DROP ở nguồn → cột tự mất ở build kế tiếp | như MySQL |
+
+Hai cơ chế CDC hành xử **giống nhau** ở mọi tầng; "more limited" của pgoutput không đổi thành khác biệt
+đo được cho `ADD COLUMN`. Chỗ vỡ là dbt: `assemble.py` sinh Silver từ catalog sống nên model mới đã
+liệt kê cột mới, macro `cdc_current_state` tự join với bảng Silver hiện có bằng danh sách đó, nhưng dbt
+chỉ áp `on_schema_change` lên bảng đích **sau** khi build bảng tạm, nên bảng tạm không bao giờ build
+được. Trước bản sửa, một `ADD COLUMN` ở nguồn đồng nghĩa Silver ngừng cập nhật cho tới khi có người
+chạy `--full-refresh`.
+
+### What we do instead
+
+- Macro chỉ đọc từ bảng đích những cột nó đang có (`adapter.get_columns_in_relation`), cột mới là
+  `NULL` cho tới khi dbt thêm nó; `on_schema_change: sync_all_columns` để chiều DROP cũng lan.
+- E1 đo cả hai chiều; cặp entry fail/pass nằm cạnh nhau trong `e1_cdc_events.jsonl`.
+
+### Impact on GR1's claims
+
+KPI "DDL handling" nên được trình bày là **so sánh ở từng tầng**, và kết luận là: ở tầng CDC hai cơ chế
+ngang nhau cho `ADD/DROP COLUMN` (khác biệt duy nhất là MySQL để lại dấu vết DDL, PostgreSQL thì không);
+rủi ro thật nằm ở cách tầng transform sinh schema. Giới hạn đã ghi ở ADR 0005 (đổi *kiểu* cột không
+thấy được với `schemas.enable=false`) vẫn chưa được đo.
+
+### Status
+
+**Fixed and verified** (2026-11-17, E1). Báo cáo: `experiments/results/e1_cdc_report.md`.
 
 ---
 

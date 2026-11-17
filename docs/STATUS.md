@@ -1,6 +1,6 @@
 # Implementation status (Trạng thái implement)
 
-**Last updated:** 2026-11-10 | **Current milestone:** M4 **done, verified** → M5 next | **Next action:** M5: chốt câu hỏi nguồn nhàn rỗi (finding 20), rồi viết collector của N1 Freshness Registry (ghi `platform.watermarks`)
+**Last updated:** 2026-11-17 | **Current milestone:** M4 **done, verified**; M7/E1 **done, verified** (kéo lên trước) → M5 next | **Next action:** M5: chốt câu hỏi nguồn nhàn rỗi (finding 20), rồi viết collector của N1 Freshness Registry (ghi `platform.watermarks`)
 
 Cách nhanh nhất để xem trạng thái thật của hệ thống: `python mosaic.py doctor`.
 
@@ -29,7 +29,7 @@ này là một **snapshot** và bị ghi đè liên tục; còn lịch sử theo
 | **M4** | Trino federation + embedding pipeline | Kênh chậm (vector index) + đăng ký dataset | **done, verified**: index chỉ chứa thực thể đủ điều kiện lúc refresh kèm ảnh chụp fact nhanh; **L0 tái hiện end-to-end**; 14 dataset đã đăng ký. Quyết định: [ADR 0006](adr/0006-m4-embedding-pipeline.md) |
 | M5 | N1 Freshness Registry | | schema + `platform.datasets` đã có (M4); collector chưa bắt đầu |
 | M6 | N2 Retrieval + fusion engine | | chưa bắt đầu |
-| M7 | Experiments E1–E4 | | chưa bắt đầu |
+| M7 | Experiments E1–E4 | E1 = so sánh CDC (GR1 Table 4.4) | **E1 done, verified** (2026-11-17, kéo lên trước M5 vì không phụ thuộc gì): đủ 5 KPI trên cả hai nguồn, [báo cáo](../experiments/results/e1_cdc_report.md), [ADR 0007](adr/0007-e1-cdc-comparison.md). E2–E4 chưa bắt đầu |
 | M8 | N3 governance, `jobmarket` domain, console | | chưa bắt đầu |
 
 **Đọc nhanh:** phần "đường ống dữ liệu" (nguồn → CDC → Bronze → Silver → Gold) và **kênh chậm**
@@ -77,6 +77,7 @@ gồm cả check mới `bronze stream`.
 | **Dataset registry (M4)** | `register`: 14 dataset (1 Bronze, 7 Silver, 5 Gold, 1 vector) trong `platform.datasets`, mỗi cái được probe; negative control (bảng không tồn tại + cột sai) → không đăng ký gì, exit 1 | Điểm bàn giao cho M5 |
 | **Abstraction gate (M4)** | quét `platform/` **và** `pipelines/embeddings/` (25 file), miễn trừ đúng `ORDER BY`; negative control `"orders"` vẫn bị bắt | Runner embedding domain-free được máy kiểm |
 | Trino memory bound | `-Xmx3G` (`docker/trino/jvm.config`) + `mem_limit: 6g` + `MALLOC_ARENA_MAX=2`, 2026-10-16. Cùng workload, trước → sau khi giới hạn: đỉnh `dbt build` incremental 6.20 → **2.59 GiB**, ghi 2,944 phân vùng 7.04 → **3.90 GiB**, đỉnh kernel 7.39 → **3.93 GiB**; 0 lần OOM; 78/78 pass. Riêng `MALLOC_ARENA_MAX` giảm off-heap 1.47 → 0.87 GiB | Trino trước đó "ăn" hết RAM của Docker VM; nay đã bị chặn trần mà không hỏng gì |
+| **E1: CDC comparison (M7)** | `python mosaic.py e1`, 2026-11-17, 6 phase, cả hai nguồn cùng phiên. Latency p50 **7.38 s** MySQL / **7.96 s** PostgreSQL (capture 0.26 / 0.51 s). Bậc thang 25/50/100 ops/s → sustained 25.0 / 29.7 / **41.0** ops/s, Kafka 53 / 64 / 88 ev/s MySQL và 30 / 36 / 48 ev/s PostgreSQL, p95 Bronze 11.9–13.1 s ở mọi bậc. SIGKILL 45 s: 0 gap, 193 replay, phẳng 42.1 s sau restart (1.97 s sau lần ghi cuối). DDL `ADD COLUMN` dưới tải: cả hai connector RUNNING, cột mới trên Kafka sau 3.7 s, Bronze ~1 s, Silver đúng giá trị sau build incremental, DROP tự lan, hoàn nguyên kiểm bằng máy. `wal-guard` pass | Table 4.4 của GR1 giờ có số thật; lần chạy DDL đầu **fail** ở Silver và dẫn tới finding 23 |
 
 ## Written but NOT yet executed (đã viết nhưng CHƯA chạy)
 
@@ -105,6 +106,8 @@ A14); đã sửa và khôi phục, kiểm chứng tới `reconcile`. Silver và 
 2026-11-10 03:38 UTC. **Index chưa refresh lại**: vẫn 946 dòng, `refreshed_at` 2026-10-16 16:46:34 UTC,
 nên giờ nó cũ hơn Gold (loadgen 60 s đã đổi giá, tồn kho, tạo đơn mới). Không có gì tự động refresh cả
 ba. `platform.datasets` có 14 dòng; `platform.watermarks` vẫn rỗng (M5).
+
+E1 (2026-11-17) đã ghi thêm tải khoảng 20 phút; sau đó `dbt build` 84/84 (macro Silver đã sửa, A15) và `reconcile` 0/0/0 trên cả 7 bảng lúc 08:04 UTC. Schema nguồn đã hoàn nguyên, không còn cột `e1_ddl_probe`.
 
 Số dòng hiện tại (seed corpus + phần tăng thêm do load generator): orders 37,037, order_items 70,697,
 payments 30,056, users 6,511, products 1,000, categories 48, inventory 1,000.
@@ -201,6 +204,15 @@ batch 1890–1891, bị rách khi Docker Desktop dừng cứng (finding 19). Ng�
     sống trong lớp ghi của container: qua được restart, nhưng **mất ở mỗi lần tạo lại container**, kể cả
     `mosaic.py down`. Đã sửa (`KAFKA_LOG_DIRS`), chứng minh bằng force-recreate (topic probe còn nguyên),
     khôi phục bằng snapshot ban đầu của connector; Silver vẫn khớp nguồn từng dòng.
+23. **DDL ở nguồn làm hỏng tầng transform, không phải tầng CDC** (A15, E1, 2026-11-17). Cả hai connector stream
+    qua `ADD COLUMN` như nhau; chính `dbt build` incremental của Silver vỡ (`Column 't.e1_ddl_probe' cannot be
+    resolved`), vì dbt build bảng tạm *trước* khi áp `on_schema_change`, còn macro tự join với bảng đích bằng
+    danh sách cột mới. Trước bản sửa, mọi `ALTER TABLE ADD COLUMN` ở nguồn làm Silver ngừng cập nhật tới khi
+    `--full-refresh`. Đã sửa macro + `sync_all_columns` (ADR 0007 E1-B6); cặp fail/pass nằm trong ledger.
+24. **Nút cổ chai của throughput là tốc độ commit ở nguồn, không phải CDC** (E1). Khi đòi 100 ops/s, nguồn chỉ
+    commit được **41 ops/s** (M1 từng thấy ~100 ops/s khi chưa có Spark chạy song song; nguyên nhân chênh lệch
+    chưa tách), trong khi p95 commit → Bronze gần như không đổi qua các bậc (11.9–13.1 s) và capture p50 giữ
+    0.26–0.28 s MySQL, 0.45–0.51 s PostgreSQL. CDC chưa bão hoà ở mức tải máy này tạo được.
 
 ## Open questions (câu hỏi còn mở)
 
@@ -244,14 +256,15 @@ batch 1890–1891, bị rách khi Docker Desktop dừng cứng (finding 19). Ng�
 - `python mosaic.py register [--dry-run]` (M4): probe + đăng ký dataset vào `platform.datasets`.
 - `python mosaic.py embed-verify [--with-refresh]` (M4): sáu kiểm tra nghiệm thu, kết thúc bằng tái hiện
   L0; `--with-refresh` cho thấy stale hit biến mất sau Gold + refresh. Tự restock sau khi chạy.
+- `python mosaic.py e1 [--phase latency|throughput|restart|ddl|wal|report]` (M7): thí nghiệm E1, GR1 Table 4.4 trên cả hai nguồn; `report` sinh `experiments/results/e1_cdc_report.md` (file duy nhất trong `results/` được commit). Giao thức: ADR 0007.
 - Các ledger trong `experiments/results/`: `restart_events`, `snapshot_events`, `bronze_events`,
-  `lakehouse_events`, `stockout_events`, `embedding_events` (`.jsonl`, append-only, **cố ý giữ cả lần thất bại**;
+  `lakehouse_events`, `stockout_events`, `embedding_events`, `e1_cdc_events` (`.jsonl`, append-only, **cố ý giữ cả lần thất bại**;
   dòng 2 của `lakehouse_events` là lần chạy negative control sai múi giờ có chủ đích).
 - `docs/BUILD-LOG.md`, `docs/ADVISOR-BRIEFING.md`, `docs/CHANGES-FROM-GR1.md`, `CLAUDE.md`.
 
 ## Immediate next steps (việc tiếp theo)
 
-M4 đã đóng (2026-10-16). Tiếp theo là M5, N1 Freshness Registry:
+M4 đã đóng (2026-10-16). E1 của M7 đã xong (2026-11-17, ADR 0007); E2–E4 cần M5, M6 và quy mô `full`. Tiếp theo là M5, N1 Freshness Registry:
 
 1. **Chốt câu hỏi nguồn nhàn rỗi trước** (open question, finding 20): watermark khi nguồn đứng yên là
    `max(_src_ts)` hay mốc heartbeat đã xác nhận.
