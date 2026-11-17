@@ -30,7 +30,11 @@ models:
       +schema: silver
       +materialized: incremental
       +incremental_strategy: merge
-      +on_schema_change: append_new_columns
+      # sync_all_columns, not append_new_columns: a column dropped at the source must
+      # leave Silver too, or the next MERGE lists a target column the temp relation no
+      # longer has (E1, ADR 0007 E1-B6). The self-join in cdc_current_state tolerates
+      # both directions; this setting makes the target follow.
+      +on_schema_change: sync_all_columns
     gold:
       +schema: gold
       # CREATE OR REPLACE keeps the Iceberg table -- and its snapshot history, which

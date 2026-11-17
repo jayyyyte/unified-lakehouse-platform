@@ -69,9 +69,20 @@ decoded as (
 candidates as (
     select * from decoded
     {%- if is_incremental() %}
+    {#- The target's own rows are read with the column list the target HAS, not the
+        list the source has now. dbt applies on_schema_change to the target only after
+        this SQL has built the temp relation, so a column added at the source (and
+        already in `columns`, since assemble.py reads the live catalog) does not exist
+        in `t` yet: it is NULL here and becomes real once dbt has altered the target.
+        A column dropped at the source is simply no longer selected. Measured by E1
+        (ADR 0007, E1-B6): without this, every source DDL broke the incremental build. -#}
+    {%- set existing = adapter.get_columns_in_relation(this) | map(attribute='name') | map('lower') | list %}
     union all
     select
-        {%- for n in names %} t.{{ adapter.quote(n) }},{% endfor %}
+        {%- for c in columns %}
+        {%- if c.name | lower in existing %} t.{{ adapter.quote(c.name) }},
+        {%- else %} cast(null as {{ c.type }}) as {{ adapter.quote(c.name) }},{% endif %}
+        {%- endfor %}
         {%- for m in meta %} t.{{ m }},{% endfor %}
         0 as _from_change
     from {{ this }} t
